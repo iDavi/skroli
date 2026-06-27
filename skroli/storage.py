@@ -25,12 +25,17 @@ class Storage:
                 title        TEXT NOT NULL,
                 body         TEXT NOT NULL DEFAULT '',
                 author       TEXT NOT NULL DEFAULT '',
+                image        TEXT NOT NULL DEFAULT '',
                 published_at REAL NOT NULL,
                 first_seen   REAL NOT NULL,
                 saved        INTEGER NOT NULL DEFAULT 0
             )
             """
         )
+        # Migrate older databases that predate the image column.
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(items)")}
+        if "image" not in cols:
+            self._db.execute("ALTER TABLE items ADD COLUMN image TEXT NOT NULL DEFAULT ''")
         self._db.commit()
 
     def add_new(self, items: list[Item]) -> int:
@@ -41,8 +46,8 @@ class Storage:
             cur = self._db.execute(
                 """
                 INSERT OR IGNORE INTO items
-                    (id, source, url, title, body, author, published_at, first_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, source, url, title, body, author, image, published_at, first_seen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     it.id,
@@ -51,6 +56,7 @@ class Storage:
                     it.title,
                     it.body,
                     it.author,
+                    it.image,
                     it.published_at.timestamp(),
                     now,
                 ),
@@ -76,6 +82,7 @@ class Storage:
                 title=r["title"],
                 body=r["body"],
                 author=r["author"],
+                image=r["image"],
                 published_at=datetime.fromtimestamp(r["published_at"], tz=timezone.utc),
                 saved=bool(r["saved"]),
             )

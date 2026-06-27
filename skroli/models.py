@@ -18,6 +18,8 @@ class Item:
     published_at: datetime
     body: str = ""
     author: str = ""
+    # Standardized lead image URL, extracted from the feed at ingest time ("" if none).
+    image: str = ""
     # Open bag for fields added by enhancers (e.g. the score). SPECS §4.
     meta: dict[str, Any] = field(default_factory=dict)
     # Populated from the federation in later versions; local-only stub for 0.0.1.

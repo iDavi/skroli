@@ -66,6 +66,9 @@ a{color:inherit;text-decoration:none}
 .dot{color:var(--stone-dim)}
 .title{font-size:17px;line-height:1.3;margin:4px 0 3px}
 .excerpt{font-size:14px;line-height:1.5;color:var(--parchment-dim)}
+.media{margin-top:11px;border:1px solid var(--olive-line);border-radius:14px;overflow:hidden;
+ max-height:340px;background:var(--olive-soft)}
+.media img{display:block;width:100%;height:100%;max-height:340px;object-fit:cover}
 .actions{display:flex;align-items:center;gap:24px;margin-top:11px;color:var(--stone);font-size:13px}
 .act:hover{color:var(--parchment)}
 .score{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--stone)}
@@ -110,6 +113,10 @@ def _post_html(it: Item) -> str:
     pct = int(round(it.score * 100))
     excerpt = html.escape(it.body[:240]) + ("…" if len(it.body) > 240 else "")
     badge_html = '<span class="badge">reddit feed</span>' if is_reddit else ""
+    media_html = (
+        f'<div class="media"><img src="{html.escape(it.image)}" alt="" loading="lazy"></div>'
+        if it.image else ""
+    )
     return f"""
     <article class="post">
       <div class="src {cls}">{html.escape(badge)}</div>
@@ -119,6 +126,7 @@ def _post_html(it: Item) -> str:
           <span class="dot">·</span><span>{_rel_time(it.published_at)}</span>{badge_html}</div>
         <div class="title">{html.escape(it.title)}</div>
         <div class="excerpt">{excerpt}</div>
+        {media_html}
         <div class="actions">
           <a class="act" href="{html.escape(it.url)}" target="_blank" rel="noopener">↗ open</a>
           <span class="score">score <b>{it.score:.2f}</b>
