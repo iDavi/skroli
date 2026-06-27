@@ -6,6 +6,7 @@ A thin SQLite layer. The schema is internal; addons never touch it directly.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import timedelta
 from pathlib import Path
 
@@ -14,6 +15,9 @@ from .models import Item, utcnow
 
 class Storage:
     def __init__(self, db_path: str | Path):
+        # Streaming means several threads (ingestor fetches, the enhancer worker,
+        # WebSocket connects) touch the DB, so guard every access with a lock.
+        self._lock = threading.Lock()
         self._db = sqlite3.connect(str(db_path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute(
@@ -42,34 +46,35 @@ class Storage:
         """Insert items not seen before (by id). Returns how many were new."""
         now = utcnow().timestamp()
         new = 0
-        for it in items:
-            cur = self._db.execute(
-                """
-                INSERT OR IGNORE INTO items
-                    (id, source, url, title, body, author, image, published_at, first_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    it.id,
-                    it.source,
-                    it.url,
-                    it.title,
-                    it.body,
-                    it.author,
-                    it.image,
-                    it.published_at.timestamp(),
-                    now,
-                ),
-            )
-            new += cur.rowcount
-            # Backfill an image onto a row that was stored before we extracted one,
-            # without disturbing first_seen / saved (so re-fetches "heal" old items).
-            if cur.rowcount == 0 and it.image:
-                self._db.execute(
-                    "UPDATE items SET image = ? WHERE id = ? AND image = ''",
-                    (it.image, it.id),
+        with self._lock:
+            for it in items:
+                cur = self._db.execute(
+                    """
+                    INSERT OR IGNORE INTO items
+                        (id, source, url, title, body, author, image, published_at, first_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        it.id,
+                        it.source,
+                        it.url,
+                        it.title,
+                        it.body,
+                        it.author,
+                        it.image,
+                        it.published_at.timestamp(),
+                        now,
+                    ),
                 )
-        self._db.commit()
+                new += cur.rowcount
+                # Backfill an image onto a row stored before we extracted one,
+                # without disturbing first_seen / saved (re-fetches "heal" old items).
+                if cur.rowcount == 0 and it.image:
+                    self._db.execute(
+                        "UPDATE items SET image = ? WHERE id = ? AND image = ''",
+                        (it.image, it.id),
+                    )
+            self._db.commit()
         return new
 
     def load_recent(self, retention_hours: int) -> list[Item]:
@@ -77,10 +82,11 @@ class Storage:
         from datetime import datetime, timezone
 
         cutoff = (utcnow() - timedelta(hours=retention_hours)).timestamp()
-        rows = self._db.execute(
-            "SELECT * FROM items WHERE first_seen >= ? OR saved = 1",
-            (cutoff,),
-        ).fetchall()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM items WHERE first_seen >= ? OR saved = 1",
+                (cutoff,),
+            ).fetchall()
         return [
             Item(
                 id=r["id"],
@@ -99,10 +105,11 @@ class Storage:
     def prune(self, retention_hours: int) -> int:
         """Drop unsaved items older than the retention window."""
         cutoff = (utcnow() - timedelta(hours=retention_hours)).timestamp()
-        cur = self._db.execute(
-            "DELETE FROM items WHERE saved = 0 AND first_seen < ?", (cutoff,)
-        )
-        self._db.commit()
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM items WHERE saved = 0 AND first_seen < ?", (cutoff,)
+            )
+            self._db.commit()
         return cur.rowcount
 
     def close(self) -> None:

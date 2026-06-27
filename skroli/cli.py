@@ -12,25 +12,33 @@ from .addons.rss_ingestor import RssIngestor
 from .addons.score_enhancer import ScoreEnhancer
 from .addons.skroli_viewer import SkroliViewer
 from .config import load_config, save_config
-from .pipeline import Pipeline
+from .pipeline import Engine
 from .storage import Storage
+from .stream import Broadcaster
 
 
-def _build_pipeline(config) -> tuple[Pipeline, SkroliViewer]:
+def _build(config) -> tuple[Engine, SkroliViewer]:
     storage = Storage(config.data_dir / "skroli.db")
     ingestors = [RssIngestor(config.rss)]
     enhancers = [ScoreEnhancer(config.score)]
-    viewer = SkroliViewer(port=config.runtime.port, rss=config.rss, score=config.score)
-    pipeline = Pipeline(config, storage, ingestors, enhancers, viewer)
-    viewer._on_refresh = pipeline.run_cycle  # wire the refresh button
+    broadcaster = Broadcaster()
+    engine = Engine(config, storage, ingestors, enhancers, broadcaster)
 
     def on_save() -> None:
-        # The viewer mutates config.rss / config.score in place; persist + re-run.
+        # The viewer mutates config.rss / config.score in place; persist + re-fetch.
         save_config(config)
-        pipeline.run_cycle()
+        engine.refresh()
 
-    viewer._on_save = on_save
-    return pipeline, viewer
+    viewer = SkroliViewer(
+        port=config.runtime.port,
+        broadcaster=broadcaster,
+        on_connect=engine.send_cached,   # new viewer gets cached items instantly
+        on_refresh=engine.refresh,       # refresh button streams fresh items
+        on_save=on_save,
+        rss=config.rss,
+        score=config.score,
+    )
+    return engine, viewer
 
 
 def cmd_run(args) -> int:
@@ -40,10 +48,11 @@ def cmd_run(args) -> int:
     print(f"  config: {src}")
     print(f"  feeds: {len(config.rss.feeds)}, subreddits: {len(config.rss.subreddits)}")
 
-    pipeline, viewer = _build_pipeline(config)
+    engine, viewer = _build(config)
 
-    print("  fetching…")
-    pipeline.run_cycle()
+    # Kick off the first fetch in the background — the UI opens immediately and
+    # fills in as items stream over the WebSocket.
+    engine.refresh()
 
     # Background polling at the configured interval.
     interval = max(config.runtime.poll_interval_minutes, 1) * 60
@@ -51,10 +60,7 @@ def cmd_run(args) -> int:
     def poll_loop():
         while True:
             time.sleep(interval)
-            try:
-                pipeline.run_cycle()
-            except Exception as exc:  # noqa: BLE001
-                print(f"  ! cycle failed: {exc}")
+            engine.refresh()
 
     threading.Thread(target=poll_loop, daemon=True).start()
 
@@ -65,8 +71,8 @@ def cmd_run(args) -> int:
 def cmd_fetch(args) -> int:
     """Run a single cycle and exit (useful for testing without the server)."""
     config = load_config(args.config)
-    pipeline, _ = _build_pipeline(config)
-    n = pipeline.run_cycle()
+    engine, _ = _build(config)
+    n = engine.run_once()
     print(f"  done: {n} items in feed")
     return 0
 

@@ -33,6 +33,8 @@ class Enhancer(Protocol):
 class Viewer(Protocol):
     name: str
 
-    def render(self, items: list[Item]) -> None:
-        """Present the final feed."""
+    def serve(self, open_window: bool = False) -> None:
+        """Present the feed. The built-in viewer serves a UI and streams items in
+        over a WebSocket as the engine produces them, rather than receiving one
+        finished list — so the window can open before any data has arrived."""
         ...

@@ -1,7 +1,9 @@
 """Built-in skroli viewer (SPECS §3.3, §13).
 
-Renders the feed in the skroli design language and serves it on localhost. Opens
-a native window via pywebview when available (extra: ``skroli[desktop]``),
+Serves an empty shell instantly, then streams items in over a WebSocket as the
+engine produces them. The feed is rendered and sorted client-side (by per-item
+score), so the window opens immediately and fills in as data arrives. Opens a
+native window via pywebview when available (extra: ``skroli[desktop]``),
 otherwise prints a URL to open in a browser.
 """
 
@@ -10,12 +12,11 @@ from __future__ import annotations
 import html
 import json
 import threading
-from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
 from ..config import RssConfig, ScoreConfig
-from ..models import Item, utcnow
+from .. import stream
 
 FONT = '"Libertinus Math","Libertinus Serif",Georgia,"Times New Roman",serif'
 
@@ -41,7 +42,6 @@ a{color:inherit;text-decoration:none}
 .nav .item.active .ic{color:var(--gold)}
 .nav .item.soon{opacity:.4;cursor:default}
 .nav .item.soon:hover{background:none}
-.nav .foot{margin-top:auto;padding:12px;font-size:13px;color:var(--stone-dim)}
 
 /* ---------- middle column ---------- */
 .feed{width:600px;flex:0 0 600px;border-right:1px solid var(--olive-line);min-height:100vh}
@@ -95,14 +95,9 @@ a{color:inherit;text-decoration:none}
 .col{flex:1;min-width:0}
 .col h4{font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--stone);
  margin-bottom:8px;display:flex;justify-content:space-between}
-.row{padding:8px 0;border-bottom:1px solid var(--olive-line);font-size:14px;
- color:var(--parchment-dim);word-break:break-all}
-.row:last-child{border-bottom:0}
-.row.none{color:var(--stone-dim)}
 .kv{display:flex;justify-content:space-between;padding:9px 0;
  border-bottom:1px solid var(--olive-line);font-size:14px;color:var(--parchment-dim)}
 .kv:last-child{border-bottom:0}
-.kv b{color:var(--gold);font-weight:600}
 .hint{color:var(--stone-dim);font-size:13px;margin-top:16px;line-height:1.5}
 .hint code{background:var(--card);border:1px solid var(--olive-line);padding:1px 6px}
 
@@ -144,54 +139,118 @@ body.home .rail .panel{display:block}
 .srcrow .c{color:var(--stone);font-size:13px}
 """
 
+# Client logic kept as a plain string (real braces) so we don't fight f-string
+# escaping. Streams items in over the WebSocket and renders the feed client-side.
+SCRIPT = """
+function show(view, el){
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active', v.id===view));
+  document.querySelectorAll('.nav .item').forEach(n=>n.classList.remove('active'));
+  el.classList.add('active');
+  document.body.classList.toggle('home', view==='home');
+}
 
-def _rel_time(dt) -> str:
-    secs = (utcnow() - dt).total_seconds()
-    if secs < 60:
-        return "now"
-    if secs < 3600:
-        return f"{int(secs // 60)}m"
-    if secs < 86400:
-        return f"{int(secs // 3600)}h"
-    return f"{int(secs // 86400)}d"
+/* ----- live feed over WebSocket ----- */
+const items = new Map();
+let ready = false;
+function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':s); return d.innerHTML; }
+function relTime(ts){
+  const s = Date.now()/1000 - ts;
+  if(s<60) return 'now';
+  if(s<3600) return Math.floor(s/60)+'m';
+  if(s<86400) return Math.floor(s/3600)+'h';
+  return Math.floor(s/86400)+'d';
+}
+function avatar(it){
+  if(it.is_reddit) return {cls:'reddit', badge:'r/'};
+  const ini = (it.source||'').split(/\\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase() || '·';
+  return {cls:'', badge:ini};
+}
+function postHTML(it){
+  const a = avatar(it);
+  const pct = Math.round((it.score||0)*100);
+  const media = it.image ? '<div class="media"><img src="'+esc(it.image)+'" alt="" loading="lazy" '+
+    'onerror="this.closest(\\'.media\\').remove()"></div>' : '';
+  const badge = it.is_reddit ? '<span class="badge">reddit feed</span>' : '';
+  return '<article class="post"><div class="src '+a.cls+'">'+esc(a.badge)+'</div><div class="body">'+
+    '<div class="meta"><span class="name">'+esc(it.source)+'</span>'+
+    '<span class="dot">·</span><span>via RSS</span>'+
+    '<span class="dot">·</span><span>'+relTime(it.published_at)+'</span>'+badge+'</div>'+
+    '<div class="title">'+esc(it.title)+'</div>'+
+    '<div class="excerpt">'+esc(it.excerpt)+'</div>'+ media +
+    '<div class="actions"><a class="act" href="'+esc(it.url)+'" target="_blank" rel="noopener">↗ open</a>'+
+    '<span class="score">score <b>'+(it.score||0).toFixed(2)+'</b>'+
+    '<span class="meter"><i style="width:'+pct+'%"></i></span></span></div></div></article>';
+}
+function renderFeed(){
+  const arr = [...items.values()].sort((a,b)=>(b.score||0)-(a.score||0));
+  const feed = document.getElementById('posts');
+  if(arr.length===0){
+    feed.innerHTML = ready
+      ? '<div class="empty">No items yet. Add feeds in Ingestors, then refresh.</div>'
+      : '<div class="empty">Loading your feed…</div>';
+  } else {
+    feed.innerHTML = arr.map(postHTML).join('');
+  }
+  document.getElementById('count').textContent = arr.length + ' items';
+  const counts = {};
+  arr.forEach(it => counts[it.source] = (counts[it.source]||0)+1);
+  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  document.getElementById('sources').innerHTML = top.length
+    ? top.map(([s,n])=>'<a class="srcrow"><span>'+esc(s)+'</span><span class="c">'+n+'</span></a>').join('')
+    : '<div class="srcrow">none yet</div>';
+}
+function connect(){
+  const proto = location.protocol==='https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(proto+'://'+location.host+'/ws');
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if(msg.type==='items'){ msg.items.forEach(it=>items.set(it.id, it)); renderFeed(); }
+    else if(msg.type==='ready'){ ready = true; renderFeed(); }
+    else if(msg.type==='status'){ document.getElementById('refresh').classList.toggle('spin', !!msg.fetching); }
+  };
+  ws.onclose = () => setTimeout(connect, 1500);
+}
+connect();
+function refresh(btn){ btn.classList.add('spin'); fetch('/api/refresh', {method:'POST'}); }
 
-
-def _avatar(source: str, is_reddit: bool) -> tuple[str, str]:
-    if is_reddit:
-        return "reddit", "r/"
-    initials = "".join(w[0] for w in source.split()[:2]).upper() or "·"
-    return "", initials
-
-
-def _post_html(it: Item) -> str:
-    # meta isn't persisted through storage, so detect reddit from the source name.
-    is_reddit = it.source.startswith("r/")
-    cls, badge = _avatar(it.source, is_reddit)
-    pct = int(round(it.score * 100))
-    excerpt = html.escape(it.body[:240]) + ("…" if len(it.body) > 240 else "")
-    badge_html = '<span class="badge">reddit feed</span>' if is_reddit else ""
-    media_html = (
-        f'<div class="media"><img src="{html.escape(it.image)}" alt="" loading="lazy"'
-        f' onerror="this.closest(\'.media\').remove()"></div>'
-        if it.image else ""
-    )
-    return f"""
-    <article class="post">
-      <div class="src {cls}">{html.escape(badge)}</div>
-      <div class="body">
-        <div class="meta"><span class="name">{html.escape(it.source)}</span>
-          <span class="dot">·</span><span>via RSS</span>
-          <span class="dot">·</span><span>{_rel_time(it.published_at)}</span>{badge_html}</div>
-        <div class="title">{html.escape(it.title)}</div>
-        <div class="excerpt">{excerpt}</div>
-        {media_html}
-        <div class="actions">
-          <a class="act" href="{html.escape(it.url)}" target="_blank" rel="noopener">↗ open</a>
-          <span class="score">score <b>{it.score:.2f}</b>
-            <span class="meter"><i style="width:{pct}%"></i></span></span>
-        </div>
-      </div>
-    </article>"""
+/* ----- config editing ----- */
+function rm(btn){ btn.closest('.erow').remove(); }
+function _append(id, frag){
+  const w = document.getElementById(id);
+  w.insertAdjacentHTML('beforeend', frag);
+  const last = w.lastElementChild.querySelector('input'); if(last) last.focus();
+}
+function addFeed(){ _append('feeds',
+  '<div class="erow"><input placeholder="https://example.com/feed.xml">'+
+  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
+function addSub(){ _append('subs',
+  '<div class="erow"><span class="pre">r/</span><input placeholder="subreddit">'+
+  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
+function addWeight(){ _append('weights',
+  '<div class="erow"><input class="wname" placeholder="Source name">'+
+  '<input class="wval" type="number" step="0.1" placeholder="1.0">'+
+  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
+function _vals(sel){ return [...document.querySelectorAll(sel)].map(i=>i.value.trim()).filter(Boolean); }
+async function _save(url, body, msgId, btn){
+  btn.disabled = true; const msg = document.getElementById(msgId);
+  if(msg) msg.textContent = 'Saving…';
+  await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  location.reload();
+}
+function saveIngestors(btn){
+  _save('/api/ingestors', {feeds:_vals('#feeds input'), subreddits:_vals('#subs input')}, 'ing-msg', btn);
+}
+function saveEnhancers(btn){
+  const weights = {};
+  document.querySelectorAll('#weights .erow').forEach(r=>{
+    const n = r.querySelector('.wname').value.trim();
+    const v = parseFloat(r.querySelector('.wval').value);
+    if(n && !isNaN(v)) weights[n] = v;
+  });
+  const hl = parseFloat(document.getElementById('halflife').value);
+  _save('/api/enhancers', {half_life_hours:(isNaN(hl)?12:hl), weights}, 'enh-msg', btn);
+}
+"""
 
 
 def _feed_row(url: str = "") -> str:
@@ -268,16 +327,7 @@ def _enhancers_page(score: ScoreConfig) -> str:
     </div>"""
 
 
-def render_page(items: list[Item], rss: RssConfig, score: ScoreConfig) -> str:
-    counts = Counter(it.source for it in items)
-    sources = "".join(
-        f'<a class="srcrow"><span>{html.escape(s)}</span><span class="c">{n}</span></a>'
-        for s, n in counts.most_common(8)
-    )
-    posts = (
-        "".join(_post_html(it) for it in items) if items
-        else '<div class="empty">No items yet. Add feeds in Ingestors and refresh.</div>'
-    )
+def render_page(rss: RssConfig, score: ScoreConfig) -> str:
     nav_items = [
         ("⌂", "Home", "home", False),
         ("↓", "Ingestors", "ingestors", False),
@@ -304,64 +354,17 @@ def render_page(items: list[Item], rss: RssConfig, score: ScoreConfig) -> str:
 <main class="feed">
   <section id="home" class="view active">
     <div class="head"><h1>Home</h1>
-      <span class="count">{len(items)} items</span>
-      <button class="iconbtn" title="Refresh feed" onclick="refresh(this)">↻</button></div>
-    {posts}
+      <span class="count" id="count">0 items</span>
+      <button class="iconbtn" id="refresh" title="Refresh feed" onclick="refresh(this)">↻</button></div>
+    <div id="posts"><div class="empty">Loading your feed…</div></div>
   </section>
   <section id="ingestors" class="view">{_ingestors_page(rss)}</section>
   <section id="enhancers" class="view">{_enhancers_page(score)}</section>
 </main>
 <aside class="rail">
-  <div class="panel"><h3>Sources</h3>{sources or '<div class="srcrow">none yet</div>'}</div>
+  <div class="panel"><h3>Sources</h3><div id="sources"><div class="srcrow">none yet</div></div></div>
 </aside>
-<script>
-function show(view, el){{
-  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active', v.id===view));
-  document.querySelectorAll('.nav .item').forEach(n=>n.classList.remove('active'));
-  el.classList.add('active');
-  document.body.classList.toggle('home', view==='home');
-}}
-async function refresh(btn){{
-  btn.disabled=true; btn.classList.add('spin');
-  await fetch('/api/refresh',{{method:'POST'}}); location.reload();
-}}
-function rm(btn){{ btn.closest('.erow').remove(); }}
-function _append(id, frag){{
-  const w=document.getElementById(id);
-  w.insertAdjacentHTML('beforeend', frag);
-  const last=w.lastElementChild.querySelector('input'); if(last) last.focus();
-}}
-function addFeed(){{ _append('feeds',
-  '<div class="erow"><input placeholder="https://example.com/feed.xml">'+
-  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }}
-function addSub(){{ _append('subs',
-  '<div class="erow"><span class="pre">r/</span><input placeholder="subreddit">'+
-  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }}
-function addWeight(){{ _append('weights',
-  '<div class="erow"><input class="wname" placeholder="Source name">'+
-  '<input class="wval" type="number" step="0.1" placeholder="1.0">'+
-  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }}
-function _vals(sel){{ return [...document.querySelectorAll(sel)].map(i=>i.value.trim()).filter(Boolean); }}
-async function _post(url, body, msgId, btn){{
-  btn.disabled=true; const msg=document.getElementById(msgId);
-  if(msg) msg.textContent='Saving…';
-  await fetch(url,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
-  location.reload();
-}}
-function saveIngestors(btn){{
-  _post('/api/ingestors', {{feeds:_vals('#feeds input'), subreddits:_vals('#subs input')}}, 'ing-msg', btn);
-}}
-function saveEnhancers(btn){{
-  const weights={{}};
-  document.querySelectorAll('#weights .erow').forEach(r=>{{
-    const n=r.querySelector('.wname').value.trim();
-    const v=parseFloat(r.querySelector('.wval').value);
-    if(n && !isNaN(v)) weights[n]=v;
-  }});
-  const hl=parseFloat(document.getElementById('halflife').value);
-  _post('/api/enhancers', {{half_life_hours:(isNaN(hl)?12:hl), weights}}, 'enh-msg', btn);
-}}
-</script>
+<script>{SCRIPT}</script>
 </body></html>"""
 
 
@@ -371,27 +374,24 @@ class SkroliViewer:
     def __init__(
         self,
         port: int = 4242,
+        broadcaster: stream.Broadcaster | None = None,
+        on_connect: Callable[[stream.Client], None] | None = None,
         on_refresh: Callable[[], None] | None = None,
         on_save: Callable[[], None] | None = None,
         rss: RssConfig | None = None,
         score: ScoreConfig | None = None,
     ):
         self.port = port
+        self._broadcaster = broadcaster or stream.Broadcaster()
+        self._on_connect = on_connect
         self._on_refresh = on_refresh
         self._on_save = on_save
         self._rss = rss or RssConfig()
         self._score = score or ScoreConfig()
-        self._items: list[Item] = []
-        self._lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
 
-    def render(self, items: list[Item]) -> None:
-        with self._lock:
-            self._items = list(items)
-
     def _page(self) -> bytes:
-        with self._lock:
-            return render_page(self._items, self._rss, self._score).encode("utf-8")
+        return render_page(self._rss, self._score).encode("utf-8")
 
     def serve(self, open_window: bool = False) -> None:
         viewer = self
@@ -401,7 +401,9 @@ class SkroliViewer:
                 pass
 
             def do_GET(self):
-                if self.path in ("/", "/index.html"):
+                if self.path == "/ws":
+                    self._serve_ws()
+                elif self.path in ("/", "/index.html"):
                     body = viewer._page()
                     self.send_response(200)
                     self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -411,6 +413,35 @@ class SkroliViewer:
                 else:
                     self.send_response(404)
                     self.end_headers()
+
+            def _serve_ws(self):
+                key = self.headers.get("Sec-WebSocket-Key")
+                if not key:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                handshake = (
+                    "HTTP/1.1 101 Switching Protocols\r\n"
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                    f"Sec-WebSocket-Accept: {stream.accept_key(key)}\r\n\r\n"
+                )
+                self.wfile.write(handshake.encode())
+                self.wfile.flush()
+                self.close_connection = True  # we own this socket now
+
+                client = stream.Client(self.connection)
+                viewer._broadcaster.add(client)
+                try:
+                    if viewer._on_connect:
+                        viewer._on_connect(client)
+                    while True:  # drain frames so we notice disconnects
+                        opcode, _ = stream.read_message(self.rfile)
+                        if opcode is None or opcode == 0x8:  # EOF or close
+                            break
+                except OSError:
+                    pass
+                finally:
+                    viewer._broadcaster.remove(client)
 
             def _read_json(self) -> dict:
                 length = int(self.headers.get("Content-Length", 0) or 0)
