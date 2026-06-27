@@ -62,6 +62,10 @@ def load_config(path: str | Path | None = None) -> Config:
     cfg = Config()
 
     candidate = Path(path) if path else Path.cwd() / DEFAULT_CONFIG_NAME
+    if path is not None:
+        # Remember an explicit config path even before the file exists so UI edits
+        # are persisted to the path the user asked skroli to use.
+        cfg.source_path = candidate
     if candidate.exists():
         raw = tomllib.loads(candidate.read_text())
         cfg.source_path = candidate
@@ -94,3 +98,48 @@ def load_config(path: str | Path | None = None) -> Config:
 
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+def _toml_string(value: str) -> str:
+    return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def _toml_array(values: list[str]) -> str:
+    if not values:
+        return '[]'
+    lines = ["["]
+    lines.extend(f"  {_toml_string(value)}," for value in values)
+    lines.append("]")
+    return "\n".join(lines)
+
+
+def write_config(config: Config, path: str | Path | None = None) -> Path:
+    """Persist the editable skroli settings to a TOML config file."""
+    target = Path(path) if path else config.source_path or Path.cwd() / DEFAULT_CONFIG_NAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = ["# skroli configuration"]
+    if config.data_dir != Path.home() / ".skroli":
+        lines.extend(["", f"data_dir = {_toml_string(str(config.data_dir))}"])
+    lines.extend([
+        "",
+        "[runtime]",
+        f"poll_interval_minutes = {int(config.runtime.poll_interval_minutes)}",
+        f"retention_hours = {int(config.runtime.retention_hours)}",
+        f"port = {int(config.runtime.port)}",
+        f"open_window = {str(bool(config.runtime.open_window)).lower()}",
+        "",
+        "[ingestors.rss]",
+        f"feeds = {_toml_array(config.rss.feeds)}",
+        f"subreddits = {_toml_array(config.rss.subreddits)}",
+        "",
+        "[enhancers.score]",
+        f"half_life_hours = {float(config.score.half_life_hours):g}",
+    ])
+    if config.score.weights:
+        lines.extend(["", "[enhancers.score.weights]"])
+        for source, weight in config.score.weights.items():
+            lines.append(f"{_toml_string(source)} = {float(weight):g}")
+    target.write_text("\n".join(lines) + "\n")
+    config.source_path = target
+    return target
