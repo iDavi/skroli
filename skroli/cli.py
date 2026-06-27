@@ -11,7 +11,7 @@ from . import __version__
 from .addons.rss_ingestor import RssIngestor
 from .addons.score_enhancer import ScoreEnhancer
 from .addons.skroli_viewer import SkroliViewer
-from .config import load_config
+from .config import load_config, save_config
 from .pipeline import Pipeline
 from .storage import Storage
 
@@ -22,7 +22,14 @@ def _build_pipeline(config) -> tuple[Pipeline, SkroliViewer]:
     enhancers = [ScoreEnhancer(config.score)]
     viewer = SkroliViewer(port=config.runtime.port, rss=config.rss, score=config.score)
     pipeline = Pipeline(config, storage, ingestors, enhancers, viewer)
-    viewer._on_refresh = pipeline.run_cycle  # wire the "Refresh feed" button
+    viewer._on_refresh = pipeline.run_cycle  # wire the refresh button
+
+    def on_save() -> None:
+        # The viewer mutates config.rss / config.score in place; persist + re-run.
+        save_config(config)
+        pipeline.run_cycle()
+
+    viewer._on_save = on_save
     return pipeline, viewer
 
 

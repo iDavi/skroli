@@ -106,6 +106,30 @@ a{color:inherit;text-decoration:none}
 .hint{color:var(--stone-dim);font-size:13px;margin-top:16px;line-height:1.5}
 .hint code{background:var(--card);border:1px solid var(--olive-line);padding:1px 6px}
 
+/* ---------- editable rows ---------- */
+.erow{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--olive-line)}
+.erow:last-child{border-bottom:0}
+.erow .pre{color:var(--stone);font-size:14px}
+.erow input{flex:1;min-width:0;background:var(--olive-soft);border:1px solid var(--olive-line);
+ color:var(--parchment);font-family:inherit;font-size:14px;padding:6px 8px}
+.erow input:focus{outline:0;border-color:var(--gold)}
+.erow .wname{flex:2}.erow .wval{flex:0 0 84px;text-align:right}
+.erow .x{flex:0 0 28px;background:transparent;border:1px solid var(--olive-line);color:var(--stone);
+ cursor:pointer;height:30px;font-size:15px;font-family:inherit}
+.erow .x:hover{color:var(--parchment);background:var(--card)}
+.addbtn{margin-top:10px;width:100%;background:transparent;border:1px dashed var(--olive-line);
+ color:var(--stone);cursor:pointer;font-family:inherit;font-size:13px;padding:8px}
+.addbtn:hover{color:var(--parchment);border-color:var(--stone)}
+.kv input{background:var(--olive-soft);border:1px solid var(--olive-line);color:var(--parchment);
+ font-family:inherit;font-size:14px;padding:5px 8px;width:90px;text-align:right}
+.kv input:focus{outline:0;border-color:var(--gold)}
+.saverow{display:flex;align-items:center;gap:14px;margin-top:18px}
+.savebtn{background:var(--parchment);color:var(--olive);border:0;font-family:inherit;
+ font-size:15px;font-weight:600;padding:9px 18px;cursor:pointer}
+.savebtn:hover{background:#fff}
+.savebtn:disabled{opacity:.6;cursor:default}
+.savemsg{font-size:13px;color:var(--stone)}
+
 /* ---------- right rail (home only) ---------- */
 .rail{width:330px;flex:0 0 330px;padding:20px 22px;display:none}
 body.home .rail{display:block}
@@ -167,15 +191,26 @@ def _post_html(it: Item) -> str:
     </article>"""
 
 
-def _rows(values: list[str]) -> str:
-    if not values:
-        return '<div class="row none">none configured</div>'
-    return "".join(f'<div class="row">{html.escape(v)}</div>' for v in values)
+def _feed_row(url: str = "") -> str:
+    return (f'<div class="erow"><input value="{html.escape(url)}" placeholder="https://example.com/feed.xml">'
+            f'<button class="x" type="button" onclick="rm(this)">×</button></div>')
+
+
+def _sub_row(name: str = "") -> str:
+    return (f'<div class="erow"><span class="pre">r/</span>'
+            f'<input value="{html.escape(name)}" placeholder="subreddit">'
+            f'<button class="x" type="button" onclick="rm(this)">×</button></div>')
+
+
+def _weight_row(name: str = "", value: str = "") -> str:
+    return (f'<div class="erow"><input class="wname" value="{html.escape(name)}" placeholder="Source name">'
+            f'<input class="wval" type="number" step="0.1" value="{html.escape(value)}" placeholder="1.0">'
+            f'<button class="x" type="button" onclick="rm(this)">×</button></div>')
 
 
 def _ingestors_page(rss: RssConfig) -> str:
-    feeds = _rows(rss.feeds)
-    subs = _rows([f"r/{s.removeprefix('r/').strip('/')}" for s in rss.subreddits])
+    feeds = "".join(_feed_row(u) for u in rss.feeds)
+    subs = "".join(_sub_row(s.removeprefix("r/").strip("/")) for s in rss.subreddits)
     return f"""
     <div class="head"><h1>Ingestors</h1></div>
     <div class="page">
@@ -184,21 +219,25 @@ def _ingestors_page(rss: RssConfig) -> str:
         <div class="desc">Reads any RSS or Atom feed, plus subreddits via their
           public <code>.rss</code>. This ingestor ships with skroli and can't be removed.</div>
         <div class="cols">
-          <div class="col"><h4>Feeds <span>{len(rss.feeds)}</span></h4>{feeds}</div>
-          <div class="col"><h4>Subreddits <span>{len(rss.subreddits)}</span></h4>{subs}</div>
+          <div class="col"><h4>Feeds</h4>
+            <div id="feeds">{feeds}</div>
+            <button class="addbtn" type="button" onclick="addFeed()">+ add feed</button>
+          </div>
+          <div class="col"><h4>Subreddits</h4>
+            <div id="subs">{subs}</div>
+            <button class="addbtn" type="button" onclick="addSub()">+ add subreddit</button>
+          </div>
         </div>
-        <div class="hint">Add or remove sources in <code>skroli.config.toml</code>
-          under <code>[ingestors.rss]</code>, then refresh.</div>
+        <div class="saverow">
+          <button class="savebtn" type="button" onclick="saveIngestors(this)">Save &amp; refresh</button>
+          <span class="savemsg" id="ing-msg"></span>
+        </div>
       </div>
     </div>"""
 
 
 def _enhancers_page(score: ScoreConfig) -> str:
-    weights = (
-        "".join(f'<div class="kv"><span>{html.escape(k)}</span><b>{v:g}×</b></div>'
-                for k, v in score.weights.items())
-        or '<div class="row none">no per-source weights</div>'
-    )
+    weights = "".join(_weight_row(k, f"{v:g}") for k, v in score.weights.items())
     return f"""
     <div class="head"><h1>Enhancers</h1></div>
     <div class="page">
@@ -209,12 +248,19 @@ def _enhancers_page(score: ScoreConfig) -> str:
           feed is sorted high to low.</div>
         <div class="cols">
           <div class="col"><h4>Parameters</h4>
-            <div class="kv"><span>Half-life</span><b>{score.half_life_hours:g} h</b></div>
+            <div class="kv"><span>Half-life (hours)</span>
+              <input id="halflife" type="number" step="0.5" min="0.1"
+                     value="{score.half_life_hours:g}"></div>
           </div>
-          <div class="col"><h4>Source weights</h4>{weights}</div>
+          <div class="col"><h4>Source weights</h4>
+            <div id="weights">{weights}</div>
+            <button class="addbtn" type="button" onclick="addWeight()">+ add weight</button>
+          </div>
         </div>
-        <div class="hint">Tune these in <code>skroli.config.toml</code>
-          under <code>[enhancers.score]</code>.</div>
+        <div class="saverow">
+          <button class="savebtn" type="button" onclick="saveEnhancers(this)">Save &amp; refresh</button>
+          <span class="savemsg" id="enh-msg"></span>
+        </div>
       </div>
     </div>"""
 
@@ -251,7 +297,6 @@ def render_page(items: list[Item], rss: RssConfig, score: ScoreConfig) -> str:
 <nav class="nav">
   <div class="brand">skroli</div>
   {nav}
-  <div class="foot">running locally</div>
 </nav>
 <main class="feed">
   <section id="home" class="view active">
@@ -277,6 +322,42 @@ async function refresh(btn){{
   btn.disabled=true; btn.classList.add('spin');
   await fetch('/api/refresh',{{method:'POST'}}); location.reload();
 }}
+function rm(btn){{ btn.closest('.erow').remove(); }}
+function _append(id, frag){{
+  const w=document.getElementById(id);
+  w.insertAdjacentHTML('beforeend', frag);
+  const last=w.lastElementChild.querySelector('input'); if(last) last.focus();
+}}
+function addFeed(){{ _append('feeds',
+  '<div class="erow"><input placeholder="https://example.com/feed.xml">'+
+  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }}
+function addSub(){{ _append('subs',
+  '<div class="erow"><span class="pre">r/</span><input placeholder="subreddit">'+
+  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }}
+function addWeight(){{ _append('weights',
+  '<div class="erow"><input class="wname" placeholder="Source name">'+
+  '<input class="wval" type="number" step="0.1" placeholder="1.0">'+
+  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }}
+function _vals(sel){{ return [...document.querySelectorAll(sel)].map(i=>i.value.trim()).filter(Boolean); }}
+async function _post(url, body, msgId, btn){{
+  btn.disabled=true; const msg=document.getElementById(msgId);
+  if(msg) msg.textContent='Saving…';
+  await fetch(url,{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
+  location.reload();
+}}
+function saveIngestors(btn){{
+  _post('/api/ingestors', {{feeds:_vals('#feeds input'), subreddits:_vals('#subs input')}}, 'ing-msg', btn);
+}}
+function saveEnhancers(btn){{
+  const weights={{}};
+  document.querySelectorAll('#weights .erow').forEach(r=>{{
+    const n=r.querySelector('.wname').value.trim();
+    const v=parseFloat(r.querySelector('.wval').value);
+    if(n && !isNaN(v)) weights[n]=v;
+  }});
+  const hl=parseFloat(document.getElementById('halflife').value);
+  _post('/api/enhancers', {{half_life_hours:(isNaN(hl)?12:hl), weights}}, 'enh-msg', btn);
+}}
 </script>
 </body></html>"""
 
@@ -288,11 +369,13 @@ class SkroliViewer:
         self,
         port: int = 4242,
         on_refresh: Callable[[], None] | None = None,
+        on_save: Callable[[], None] | None = None,
         rss: RssConfig | None = None,
         score: ScoreConfig | None = None,
     ):
         self.port = port
         self._on_refresh = on_refresh
+        self._on_save = on_save
         self._rss = rss or RssConfig()
         self._score = score or ScoreConfig()
         self._items: list[Item] = []
@@ -326,16 +409,52 @@ class SkroliViewer:
                     self.send_response(404)
                     self.end_headers()
 
+            def _read_json(self) -> dict:
+                length = int(self.headers.get("Content-Length", 0) or 0)
+                raw = self.rfile.read(length) if length else b""
+                try:
+                    return json.loads(raw or b"{}")
+                except (ValueError, TypeError):
+                    return {}
+
+            def _ok(self):
+                body = json.dumps({"ok": True}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_POST(self):
                 if self.path == "/api/refresh":
                     if viewer._on_refresh:
                         viewer._on_refresh()
-                    body = json.dumps({"ok": True}).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self._ok()
+                elif self.path == "/api/ingestors":
+                    data = self._read_json()
+                    viewer._rss.feeds = [str(x) for x in data.get("feeds", []) if str(x).strip()]
+                    viewer._rss.subreddits = [
+                        str(x).strip() for x in data.get("subreddits", []) if str(x).strip()
+                    ]
+                    if viewer._on_save:
+                        viewer._on_save()
+                    self._ok()
+                elif self.path == "/api/enhancers":
+                    data = self._read_json()
+                    try:
+                        viewer._score.half_life_hours = max(float(data.get("half_life_hours", 12)), 0.1)
+                    except (ValueError, TypeError):
+                        pass
+                    weights: dict[str, float] = {}
+                    for k, v in (data.get("weights") or {}).items():
+                        try:
+                            weights[str(k)] = float(v)
+                        except (ValueError, TypeError):
+                            continue
+                    viewer._score.weights = weights
+                    if viewer._on_save:
+                        viewer._on_save()
+                    self._ok()
                 else:
                     self.send_response(404)
                     self.end_headers()

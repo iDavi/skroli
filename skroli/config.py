@@ -54,6 +54,51 @@ def _default_rss() -> RssConfig:
     )
 
 
+def _toml_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _toml_array(items: list[str]) -> str:
+    return "[" + ", ".join(f'"{_toml_escape(i)}"' for i in items) + "]"
+
+
+def _toml_num(value: float) -> str:
+    # Keep whole numbers tidy (12.0 -> "12.0", 1.2 -> "1.2") without float noise.
+    return f"{value:g}" if value != int(value) else f"{value:.1f}"
+
+
+def save_config(config: Config) -> Path:
+    """Write ``config`` back to disk as TOML. Used by the in-UI editor.
+
+    Targets ``config.source_path`` if known, else ``./skroli.config.toml``. The
+    file is regenerated from the live config, so hand-written comments are lost.
+    """
+    target = config.source_path or (Path.cwd() / DEFAULT_CONFIG_NAME)
+    rt = config.runtime
+    lines = [
+        "# skroli configuration — written by skroli (the in-app editor rewrites this file).",
+        "",
+        "[runtime]",
+        f"poll_interval_minutes = {rt.poll_interval_minutes}",
+        f"retention_hours = {rt.retention_hours}",
+        f"port = {rt.port}",
+        f"open_window = {'true' if rt.open_window else 'false'}",
+        "",
+        "[ingestors.rss]",
+        f"feeds = {_toml_array(config.rss.feeds)}",
+        f"subreddits = {_toml_array(config.rss.subreddits)}",
+        "",
+        "[enhancers.score]",
+        f"half_life_hours = {_toml_num(config.score.half_life_hours)}",
+    ]
+    if config.score.weights:
+        lines += ["", "[enhancers.score.weights]"]
+        lines += [f'"{_toml_escape(k)}" = {_toml_num(v)}' for k, v in config.score.weights.items()]
+    target.write_text("\n".join(lines) + "\n")
+    config.source_path = target
+    return target
+
+
 def load_config(path: str | Path | None = None) -> Config:
     """Load config from ``path`` (or the default location), applying defaults.
 
