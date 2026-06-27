@@ -429,12 +429,12 @@ tokens.)
 
 ### 13.2 Typography
 
-- A classic **serif** for the wordmark and headings, matching the README
-  (lowercase `skroli` wordmark, serif section labels).
-- Until the exact face is pinned, use an open web serif that closely matches —
-  **EB Garamond** or **Lora** — bundled with the app so rendering is consistent
-  offline. The final face is a design decision to confirm.
-- Body/UI text may use the same serif or a quiet companion; keep it editorial,
+- The typeface is **Libertinus Math** (the wordmark and headings), giving the
+  editorial, classical-serif feel of the README.
+- Bundle the font with the app so rendering is consistent offline. Provide a
+  graceful fallback stack (`"Libertinus Math","Libertinus Serif",Georgia,serif`)
+  for environments where it isn't installed.
+- Body/UI text may use the same family or a quiet companion; keep it editorial,
   not chrome-heavy.
 
 ### 13.3 Motifs

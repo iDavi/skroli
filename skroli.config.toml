@@ -1,0 +1,25 @@
+# skroli configuration (0.0.1)
+# Everything here is optional — running skroli with no config file uses sensible
+# defaults. Copy this file, edit it, and run `skroli -c skroli.config.toml run`.
+
+[runtime]
+poll_interval_minutes = 15   # how often to re-fetch in the background
+retention_hours = 48         # drop items older than this (saved items are kept)
+port = 4242                  # the local viewer is served here
+open_window = false          # true = native window (needs `pip install skroli[desktop]`)
+
+# The built-in RSS ingestor. It can't be removed; configure its sources here.
+[ingestors.rss]
+feeds = [
+  "https://news.ycombinator.com/rss",
+  "https://www.theverge.com/rss/index.xml",
+]
+# Subreddits are fetched as reddit.com/r/<name>/.rss — no Reddit account needed.
+subreddits = ["programming", "selfhosted"]
+
+# The built-in scoring enhancer: score = recency-decay × per-source weight.
+[enhancers.score]
+half_life_hours = 12.0
+# Optional: nudge specific sources up or down (matched on their feed title).
+# [enhancers.score.weights]
+# "Hacker News" = 1.2

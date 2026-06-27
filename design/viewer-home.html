@@ -17,7 +17,7 @@
     --stone:#959389;
     --stone-dim:#8c8a7f;
     --gold:#c9b27a;
-    --serif:"EB Garamond","Hoefler Text",Georgia,"Times New Roman",serif;
+    --serif:"Libertinus Math","Libertinus Serif",Georgia,"Times New Roman",serif;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{background:var(--olive);color:var(--parchment);font-family:var(--serif)}
@@ -51,51 +51,62 @@
   .feedhead{position:sticky;top:0;backdrop-filter:blur(8px);background:rgba(79,75,59,.82);
        border-bottom:1px solid var(--olive-line);padding:18px 22px;display:flex;
        align-items:center;justify-content:space-between}
-  .feedhead h1{font-size:25px;font-weight:600}
-  .feedhead .sub{font-size:15px;color:var(--stone)}
+  .feedhead h1{font-size:21px;font-weight:600}
+  .feedhead .sub{font-size:13px;color:var(--stone)}
+  .feedhead .count{font-size:13px;color:var(--stone)}
   .tabs{display:flex;border-bottom:1px solid var(--olive-line)}
-  .tabs .t{flex:1;text-align:center;padding:14px;color:var(--stone);font-size:18px;cursor:pointer}
+  .tabs .t{flex:1;text-align:center;padding:13px;color:var(--stone);font-size:15px;cursor:pointer}
   .tabs .t.on{color:var(--parchment);box-shadow:inset 0 -2px 0 var(--gold)}
 
-  .post{padding:18px 22px;border-bottom:1px solid var(--olive-line);display:flex;gap:14px;
+  .post{padding:16px 22px;border-bottom:1px solid var(--olive-line);display:flex;gap:13px;
         transition:.15s}
   .post:hover{background:var(--card)}
-  .src{width:44px;height:44px;border-radius:50%;flex:0 0 44px;display:flex;align-items:center;
-       justify-content:center;font-size:18px;border:1px solid var(--olive-line)}
+  .src{width:38px;height:38px;border-radius:50%;flex:0 0 38px;display:flex;align-items:center;
+       justify-content:center;font-size:15px;border:1px solid var(--olive-line)}
   .src.rss{background:#6b5d34;color:#e7d6a3}
   .src.reddit{background:#7a4632;color:#f2c2ad}
   .src.nyt{background:#3f3c30;color:#e9e7df}
   .post .body{flex:1;min-width:0}
-  .meta{display:flex;align-items:center;gap:7px;font-size:16px;color:var(--stone);flex-wrap:wrap}
-  .meta .name{color:var(--parchment);font-weight:600;font-size:17px}
-  .meta .badge{font-size:13px;color:var(--parchment-dim);border:1px solid var(--olive-line);
-       padding:1px 8px;border-radius:20px}
+  .meta{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--stone);flex-wrap:wrap}
+  .meta .name{color:var(--parchment);font-weight:600;font-size:14px}
+  .meta .badge{font-size:11px;color:var(--parchment-dim);border:1px solid var(--olive-line);
+       padding:1px 7px;border-radius:20px}
   .dot{color:var(--stone-dim)}
-  .title{font-size:21px;line-height:1.25;margin:5px 0 4px}
-  .excerpt{font-size:17px;line-height:1.45;color:var(--parchment-dim)}
-  .thumb{margin-top:11px;height:168px;border-radius:14px;border:1px solid var(--olive-line);
+  .title{font-size:17px;line-height:1.3;margin:4px 0 3px}
+  .excerpt{font-size:14px;line-height:1.5;color:var(--parchment-dim)}
+  .thumb{margin-top:10px;height:150px;border-radius:14px;border:1px solid var(--olive-line);
        background:linear-gradient(135deg,#5a5640,#46422f);display:flex;align-items:center;
-       justify-content:center;color:var(--stone);font-size:15px}
-  .actions{display:flex;align-items:center;gap:30px;margin-top:13px;color:var(--stone);font-size:16px}
-  .act{display:flex;align-items:center;gap:7px;cursor:pointer;transition:.15s}
+       justify-content:center;color:var(--stone);font-size:13px}
+  .actions{display:flex;align-items:center;gap:24px;margin-top:11px;color:var(--stone);font-size:13px}
+  .act{display:flex;align-items:center;gap:6px;cursor:pointer;transition:.15s}
   .act:hover{color:var(--parchment)}
   .act.saved{color:var(--gold)}
-  .score{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:15px;color:var(--stone)}
+  .score{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--stone)}
   .score b{color:var(--gold);font-weight:600}
-  .meter{width:64px;height:5px;border-radius:4px;background:var(--olive-line);overflow:hidden}
+  .meter{width:56px;height:4px;border-radius:4px;background:var(--olive-line);overflow:hidden}
   .meter i{display:block;height:100%;background:var(--gold)}
 
   /* ---------- right rail ---------- */
-  .rail{width:330px;flex:0 0 330px;padding:24px 22px}
-  .panel{background:var(--card);border:1px solid var(--olive-line);border-radius:18px;
-       padding:18px 20px;margin-bottom:20px}
-  .panel h3{font-size:20px;margin-bottom:6px}
-  .panel p{font-size:15px;color:var(--stone);line-height:1.45}
-  .ing{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--olive-line)}
-  .ing:last-child{border-bottom:0}
-  .ing .nm{font-size:17px}.ing .ct{font-size:14px;color:var(--stone)}
-  .ing .lock{margin-left:auto;font-size:13px;color:var(--stone-dim)}
-  .rate{color:var(--gold);font-size:16px;letter-spacing:3px}
+  .rail{width:330px;flex:0 0 330px;padding:20px 22px}
+  .search{display:flex;align-items:center;gap:9px;background:rgba(0,0,0,.14);
+       border:1px solid var(--olive-line);border-radius:12px;padding:10px 14px;margin-bottom:18px;
+       color:var(--stone);font-size:16px}
+  .search input{flex:1;background:none;border:0;outline:none;color:var(--parchment);
+       font-family:var(--serif);font-size:15px}
+  .search input::placeholder{color:var(--stone-dim)}
+  .panel{background:var(--card);border:1px solid var(--olive-line);border-radius:16px;
+       padding:14px 16px;margin-bottom:18px}
+  .panel h3{font-size:15px;margin-bottom:6px;color:var(--stone);font-weight:600;
+       text-transform:uppercase;letter-spacing:.6px}
+  .srcrow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;
+       font-size:15px;color:var(--parchment-dim);border-bottom:1px solid var(--olive-line)}
+  .srcrow:last-child{border-bottom:0}
+  .srcrow .c{color:var(--stone);font-size:13px}
+  .srcrow.add{color:var(--stone)}
+  .savedrow{display:block;font-size:14px;line-height:1.4;color:var(--parchment-dim);padding:8px 0;
+       border-bottom:1px solid var(--olive-line)}
+  .savedrow:last-child{border-bottom:0}
+  .savedrow span{display:block;font-size:12px;color:var(--stone);margin-top:2px}
 </style>
 </head>
 <body>
@@ -121,7 +132,7 @@
   <main class="feed">
     <div class="feedhead">
       <div><h1>Home</h1><div class="sub">your custom local internet algorithm</div></div>
-      <div class="rate">★★★★★</div>
+      <div class="count">24 items · updated 2m ago</div>
     </div>
     <div class="tabs">
       <div class="t on">For you</div>
@@ -214,25 +225,25 @@
 
   <!-- RIGHT RAIL -->
   <aside class="rail">
+    <div class="search">⌕ <input placeholder="Search your feed"></div>
+
     <div class="panel">
-      <h3>Your algorithm</h3>
-      <p>Built from <b style="color:var(--parchment)">1 ingestor</b>,
-        <b style="color:var(--parchment)">1 enhancer</b>,
-        <b style="color:var(--parchment)">1 viewer</b>. Simple, as it should be.</p>
+      <h3>Sources</h3>
+      <a class="srcrow"><span>Hacker News</span><span class="c">9</span></a>
+      <a class="srcrow"><span>The Verge</span><span class="c">6</span></a>
+      <a class="srcrow"><span>r/programming</span><span class="c">5</span></a>
+      <a class="srcrow"><span>r/selfhosted</span><span class="c">4</span></a>
+      <a class="srcrow add"><span>Manage sources</span><span class="c">→</span></a>
     </div>
+
     <div class="panel">
-      <h3>Ingestors</h3>
-      <div class="ing"><span class="src rss" style="width:34px;height:34px;flex-basis:34px;font-size:14px">⤳</span>
-        <div><div class="nm">RSS</div><div class="ct">7 feeds · 3 subreddits</div></div>
-        <span class="lock">built-in</span></div>
-      <div class="ing"><span class="src" style="width:34px;height:34px;flex-basis:34px;font-size:13px;color:var(--stone)">+</span>
-        <div><div class="nm" style="color:var(--stone)">Add ingestor</div>
-          <div class="ct">from the addon store</div></div></div>
-    </div>
-    <div class="panel">
-      <h3>Top scored today</h3>
-      <p style="color:var(--parchment)">A practical guide to writing a small, fast feed ranker</p>
-      <div class="rate" style="margin-top:6px">★★★★★</div>
+      <h3>Saved</h3>
+      <a class="savedrow">SQLite is not a toy database
+        <span>Hacker News · 2h</span></a>
+      <a class="savedrow">The State of Self-Hosting in 2025
+        <span>r/selfhosted · 6h</span></a>
+      <a class="savedrow">Postgres 17: logical replication slots
+        <span>The Verge · yesterday</span></a>
     </div>
   </aside>
 
