@@ -9,14 +9,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-import urllib.request
 from datetime import datetime, timezone
 
 from ..config import HnConfig
+from ..fetcher import fetch
 from ..models import Item, utcnow
 
 API = "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage="
-USER_AGENT = "skroli/0.0.1 (+https://github.com/iDavi/skroli)"
 ITEM_URL = "https://news.ycombinator.com/item?id="
 
 
@@ -33,10 +32,7 @@ class HackerNewsIngestor:
     def fetch(self) -> list[Item]:
         if self._config.count <= 0:
             return []
-        req = urllib.request.Request(API + str(self._config.count),
-                                     headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            payload = json.loads(resp.read())
+        payload = json.loads(fetch(API + str(self._config.count)))
 
         items: list[Item] = []
         for hit in payload.get("hits", []):

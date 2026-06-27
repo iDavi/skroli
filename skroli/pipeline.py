@@ -74,11 +74,14 @@ class Engine:
             items = self._queue.get()
             if not items:
                 continue
-            self.storage.add_new(items)  # dedup + persist
-            items = self._enhance(items)
-            self.broadcaster.publish(
-                {"type": "items", "items": [item_to_dict(i) for i in items]}
-            )
+            try:
+                self.storage.add_new(items)  # dedup + persist
+                items = self._enhance(items)
+                self.broadcaster.publish(
+                    {"type": "items", "items": [item_to_dict(i) for i in items]}
+                )
+            except Exception as exc:  # noqa: BLE001 - keep the worker alive across errors
+                print(f"  ! processing batch failed: {exc}")
 
     # --- ingestor stage (parallel, each feeds the queue) --------------------
     def _fetch_one(self, ingestor: Ingestor) -> None:

@@ -18,18 +18,16 @@ import hashlib
 import html
 import json
 import re
-import time
 import urllib.error
-import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 from ..config import RssConfig
+from ..fetcher import fetch
 from ..models import Item, utcnow
 
-USER_AGENT = "skroli/0.0.1 (+https://github.com/iDavi/skroli)"
 ATOM = "{http://www.w3.org/2005/Atom}"
 MEDIA = "{http://search.yahoo.com/mrss/}"
 CONTENT = "{http://purl.org/rss/1.0/modules/content/}"
@@ -37,9 +35,6 @@ _TAGS = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 _IMG_SRC = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
 REDDIT_LIMIT = 25  # posts per subreddit
-# Reddit rate-limits anonymous requests hard; be polite between requests and retry.
-_REQUEST_GAP_SECONDS = 1.5
-_MAX_RETRIES = 3
 
 
 _LB_FOLLOWING = re.compile(r'href="/([^/"]+)/"\s+class="name"')
@@ -59,10 +54,8 @@ def letterboxd_following(username: str, max_pages: int = _LB_MAX_PAGES) -> list[
         path = f"https://letterboxd.com/{user}/following/"
         if page > 1:
             path += f"page/{page}/"
-        req = urllib.request.Request(path, headers={"User-Agent": USER_AGENT})
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                html_text = resp.read().decode("utf-8", "replace")
+            html_text = fetch(path).decode("utf-8", "replace")
         except Exception:  # noqa: BLE001 - stop on the first page that fails
             break
         names = [n for n in _LB_FOLLOWING.findall(html_text) if n != user]
@@ -175,26 +168,6 @@ class RssIngestor:
             ))
         return out
 
-    def _fetch_url(self, url: str) -> bytes:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        for attempt in range(_MAX_RETRIES):
-            try:
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    return resp.read()
-            except urllib.error.HTTPError as exc:
-                if exc.code != 429 or attempt == _MAX_RETRIES - 1:
-                    raise
-                # Honor Retry-After when present, otherwise exponential backoff.
-                retry_after = exc.headers.get("Retry-After")
-                try:
-                    wait = float(retry_after) if retry_after else 0.0
-                except ValueError:
-                    wait = 0.0
-                wait = max(wait, 2.0 * (2 ** attempt))
-                print(f"  · rate-limited (429), retrying in {wait:.0f}s…")
-                time.sleep(wait)
-        raise RuntimeError("unreachable")
-
     def _parse(self, raw: bytes, label: str, url: str) -> list[Item]:
         root = ET.fromstring(raw)
         items: list[Item] = []
@@ -278,18 +251,27 @@ class RssIngestor:
             ))
         return items
 
+    def _fetch_reddit(self, label: str, json_url: str) -> list[Item]:
+        """Reddit's JSON API (with votes) tends to 403 from some networks; fall
+        back to the public .rss feed (no votes) so the subreddit still shows up."""
+        name = label.removeprefix("r/")
+        try:
+            return self._parse_reddit(fetch(json_url), label)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (403, 429, 404):
+                raise
+            print(f"  · reddit JSON blocked for {label} ({exc.code}); using RSS (no votes)")
+            rss = fetch(f"https://www.reddit.com/r/{name}/.rss")
+            return self._parse(rss, label, json_url)
+
     def fetch(self) -> list[Item]:
         items: list[Item] = []
-        sources = self._sources()
-        for i, (kind, label, url) in enumerate(sources):
-            if i:  # space requests out so feeds (esp. Reddit) don't 429 us
-                time.sleep(_REQUEST_GAP_SECONDS)
+        for kind, label, url in self._sources():
             try:
-                raw = self._fetch_url(url)
                 if kind == "reddit":
-                    items.extend(self._parse_reddit(raw, label))
+                    items.extend(self._fetch_reddit(label, url))
                 else:
-                    items.extend(self._parse(raw, label, url))
+                    items.extend(self._parse(fetch(url), label, url))
             except Exception as exc:  # noqa: BLE001 - one bad feed shouldn't stop the rest
                 print(f"  ! feed failed ({label or url}): {exc}")
         return items

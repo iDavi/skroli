@@ -186,8 +186,19 @@ function postHTML(it){
     '<span class="score">score <b>'+(it.score||0).toFixed(2)+'</b>'+
     '<span class="meter"><i style="width:'+pct+'%"></i></span></span></div></div></article>';
 }
+let _renderQueued = false, _lastSig = '';
+function scheduleRender(){
+  // Coalesce bursts of streamed batches into one paint so the feed doesn't thrash.
+  if(_renderQueued) return;
+  _renderQueued = true;
+  requestAnimationFrame(()=>{ _renderQueued = false; renderFeed(); });
+}
 function renderFeed(){
   const arr = [...items.values()].sort((a,b)=>(b.score||0)-(a.score||0));
+  // Skip the rebuild entirely if nothing visible actually changed (avoids flicker).
+  const sig = arr.map(it=>it.id+':'+(it.score||0)).join(',') + '|' + ready;
+  if(sig === _lastSig) return;
+  _lastSig = sig;
   const feed = document.getElementById('posts');
   if(arr.length===0){
     feed.innerHTML = ready
@@ -203,14 +214,20 @@ function renderFeed(){
   document.getElementById('sources').innerHTML = top.length
     ? top.map(([s,n])=>'<a class="srcrow"><span>'+esc(s)+'</span><span class="c">'+n+'</span></a>').join('')
     : '<div class="srcrow">none yet</div>';
+  // Keep the source-weight combobox suggestions in sync with what's in the feed.
+  const dl = document.getElementById('srclist');
+  if(dl){
+    const names = [...new Set([...items.values()].map(i=>i.source))].sort();
+    dl.innerHTML = names.map(s=>'<option value="'+esc(s)+'">').join('');
+  }
 }
 function connect(){
   const proto = location.protocol==='https:' ? 'wss' : 'ws';
   const ws = new WebSocket(proto+'://'+location.host+'/ws');
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
-    if(msg.type==='items'){ msg.items.forEach(it=>items.set(it.id, it)); renderFeed(); }
-    else if(msg.type==='ready'){ ready = true; renderFeed(); }
+    if(msg.type==='items'){ msg.items.forEach(it=>items.set(it.id, it)); scheduleRender(); }
+    else if(msg.type==='ready'){ ready = true; scheduleRender(); }
     else if(msg.type==='status'){ document.getElementById('refresh').classList.toggle('spin', !!msg.fetching); }
   };
   ws.onclose = () => setTimeout(connect, 1500);
@@ -232,7 +249,7 @@ function addSub(){ _append('subs',
   '<div class="erow"><span class="pre">r/</span><input placeholder="subreddit">'+
   '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
 function addWeight(){ _append('weights',
-  '<div class="erow"><input class="wname" placeholder="Source name">'+
+  '<div class="erow"><input class="wname" list="srclist" placeholder="pick or type a source">'+
   '<input class="wval" type="number" step="0.1" placeholder="1.0">'+
   '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
 function addLb(value){ _append('letterboxd',
@@ -298,7 +315,8 @@ def _sub_row(name: str = "") -> str:
 
 
 def _weight_row(name: str = "", value: str = "") -> str:
-    return (f'<div class="erow"><input class="wname" value="{html.escape(name)}" placeholder="Source name">'
+    return (f'<div class="erow"><input class="wname" list="srclist" value="{html.escape(name)}" '
+            f'placeholder="pick or type a source">'
             f'<input class="wval" type="number" step="0.1" value="{html.escape(value)}" placeholder="1.0">'
             f'<button class="x" type="button" onclick="rm(this)">×</button></div>')
 
@@ -459,6 +477,7 @@ def render_page(config: Config) -> str:
 <aside class="rail">
   <div class="panel"><h3>Sources</h3><div id="sources"><div class="srcrow">none yet</div></div></div>
 </aside>
+<datalist id="srclist"></datalist>
 <script>{SCRIPT}</script>
 </body></html>"""
 
