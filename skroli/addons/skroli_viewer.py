@@ -67,8 +67,8 @@ a{color:inherit;text-decoration:none}
 .title{font-size:17px;line-height:1.3;margin:4px 0 3px}
 .excerpt{font-size:14px;line-height:1.5;color:var(--parchment-dim)}
 .media{margin-top:11px;border:1px solid var(--olive-line);border-radius:14px;overflow:hidden;
- max-height:340px;background:var(--olive-soft)}
-.media img{display:block;width:100%;height:100%;max-height:340px;object-fit:cover}
+ aspect-ratio:16/9;background:var(--olive-soft)}
+.media img{display:block;width:100%;height:100%;object-fit:cover}
 .actions{display:flex;align-items:center;gap:24px;margin-top:11px;color:var(--stone);font-size:13px}
 .act:hover{color:var(--parchment)}
 .score{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--stone)}
@@ -114,7 +114,8 @@ def _post_html(it: Item) -> str:
     excerpt = html.escape(it.body[:240]) + ("…" if len(it.body) > 240 else "")
     badge_html = '<span class="badge">reddit feed</span>' if is_reddit else ""
     media_html = (
-        f'<div class="media"><img src="{html.escape(it.image)}" alt="" loading="lazy"></div>'
+        f'<div class="media"><img src="{html.escape(it.image)}" alt="" loading="lazy"'
+        f' onerror="this.closest(\'.media\').remove()"></div>'
         if it.image else ""
     )
     return f"""
