@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import html
 import re
+import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -24,6 +26,9 @@ USER_AGENT = "skroli/0.0.1 (+https://github.com/iDavi/skroli)"
 ATOM = "{http://www.w3.org/2005/Atom}"
 _TAGS = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
+# Reddit rate-limits anonymous .rss hard; be polite between requests and retry.
+_REQUEST_GAP_SECONDS = 1.5
+_MAX_RETRIES = 3
 
 
 def _stable_id(source: str, entry_id: str) -> str:
@@ -72,8 +77,23 @@ class RssIngestor:
 
     def _fetch_url(self, url: str) -> bytes:
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return resp.read()
+        for attempt in range(_MAX_RETRIES):
+            try:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    return resp.read()
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429 or attempt == _MAX_RETRIES - 1:
+                    raise
+                # Honor Retry-After when present, otherwise exponential backoff.
+                retry_after = exc.headers.get("Retry-After")
+                try:
+                    wait = float(retry_after) if retry_after else 0.0
+                except ValueError:
+                    wait = 0.0
+                wait = max(wait, 2.0 * (2 ** attempt))
+                print(f"  · rate-limited (429), retrying in {wait:.0f}s…")
+                time.sleep(wait)
+        raise RuntimeError("unreachable")
 
     def _parse(self, raw: bytes, label: str, url: str, is_reddit: bool) -> list[Item]:
         root = ET.fromstring(raw)
@@ -126,7 +146,10 @@ class RssIngestor:
 
     def fetch(self) -> list[Item]:
         items: list[Item] = []
-        for label, url, is_reddit in self._sources():
+        sources = self._sources()
+        for i, (label, url, is_reddit) in enumerate(sources):
+            if i:  # space requests out so feeds (esp. Reddit) don't 429 us
+                time.sleep(_REQUEST_GAP_SECONDS)
             try:
                 raw = self._fetch_url(url)
                 items.extend(self._parse(raw, label, url, is_reddit))

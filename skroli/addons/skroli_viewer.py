@@ -35,6 +35,9 @@ a{color:inherit;text-decoration:none}
 .nav .item .ic{width:20px;text-align:center;color:var(--stone);font-size:16px}
 .nav .item.active{color:var(--parchment);background:var(--card)}
 .nav .item.active .ic{color:var(--gold)}
+.nav .item.soon{opacity:.45;cursor:default}
+.nav .item.soon .tag{margin-left:auto;font-size:11px;color:var(--stone-dim);
+ border:1px solid var(--olive-line);padding:1px 7px;border-radius:20px}
 .compose{margin-top:18px;background:var(--parchment);color:var(--olive);text-align:center;
  padding:13px;border-radius:14px;font-size:20px;font-weight:600;cursor:pointer;border:0;
  font-family:__FONT__}
@@ -142,8 +145,14 @@ def render_page(items: list[Item]) -> str:
         ("▢", "Viewers", False),
         ("⚙", "Settings", False),
     ]
+    # Only Home is built in 0.0.1; the rest are marked "soon" so they don't look broken.
     nav = "".join(
-        f'<div class="item{" active" if a else ""}"><span class="ic">{i}</span> {l}</div>'
+        (
+            f'<div class="item active"><span class="ic">{i}</span> {l}</div>'
+            if a else
+            f'<div class="item soon"><span class="ic">{i}</span> {l}'
+            f'<span class="tag">soon</span></div>'
+        )
         for i, l, a in nav_items
     )
     css = CSS.replace("__FONT__", FONT)
