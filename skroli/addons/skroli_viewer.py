@@ -152,6 +152,7 @@ function show(view, el){
 /* ----- live feed over WebSocket ----- */
 const items = new Map();
 let ready = false;
+let fetching = false;
 function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':s); return d.innerHTML; }
 function relTime(ts){
   const s = Date.now()/1000 - ts;
@@ -186,22 +187,16 @@ function postHTML(it){
     '<span class="score">score <b>'+(it.score||0).toFixed(2)+'</b>'+
     '<span class="meter"><i style="width:'+pct+'%"></i></span></span></div></div></article>';
 }
-let _renderQueued = false, _lastSig = '';
-function scheduleRender(){
-  // Coalesce bursts of streamed batches into one paint so the feed doesn't thrash.
-  if(_renderQueued) return;
-  _renderQueued = true;
-  requestAnimationFrame(()=>{ _renderQueued = false; renderFeed(); });
-}
+let _lastSig = '';
 function renderFeed(){
   const arr = [...items.values()].sort((a,b)=>(b.score||0)-(a.score||0));
   // Skip the rebuild entirely if nothing visible actually changed (avoids flicker).
-  const sig = arr.map(it=>it.id+':'+(it.score||0)).join(',') + '|' + ready;
+  const sig = arr.map(it=>it.id+':'+(it.score||0)).join(',') + '|' + ready + '|' + fetching;
   if(sig === _lastSig) return;
   _lastSig = sig;
   const feed = document.getElementById('posts');
   if(arr.length===0){
-    feed.innerHTML = ready
+    feed.innerHTML = (ready && !fetching)
       ? '<div class="empty">No items yet. Add feeds in Ingestors, then refresh.</div>'
       : '<div class="empty">Loading your feed…</div>';
   } else {
@@ -226,9 +221,17 @@ function connect(){
   const ws = new WebSocket(proto+'://'+location.host+'/ws');
   ws.onmessage = ev => {
     const msg = JSON.parse(ev.data);
-    if(msg.type==='items'){ msg.items.forEach(it=>items.set(it.id, it)); scheduleRender(); }
-    else if(msg.type==='ready'){ ready = true; scheduleRender(); }
-    else if(msg.type==='status'){ document.getElementById('refresh').classList.toggle('spin', !!msg.fetching); }
+    if(msg.type==='items'){
+      // Buffer silently — don't reorder the visible feed while a fetch is running.
+      msg.items.forEach(it=>items.set(it.id, it));
+      if(!fetching) renderFeed();   // cached load / idle update: safe to show now
+    } else if(msg.type==='ready'){
+      ready = true; renderFeed();
+    } else if(msg.type==='status'){
+      fetching = !!msg.fetching;
+      document.getElementById('refresh').classList.toggle('spin', fetching);
+      if(!fetching) renderFeed();   // fetch finished → one settled update
+    }
   };
   ws.onclose = () => setTimeout(connect, 1500);
 }
