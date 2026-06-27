@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>skroli — home</title>
+<style>
+  /* skroli design language — SPECS §13 */
+  :root{
+    --olive:#4f4b3b;
+    --olive-soft:#56523f;
+    --olive-line:#605b46;
+    --card:rgba(255,255,255,.035);
+    --card-hover:rgba(255,255,255,.06);
+    --parchment:#f5f3ec;
+    --parchment-dim:#d9d6c8;
+    --stone:#959389;
+    --stone-dim:#8c8a7f;
+    --gold:#c9b27a;
+    --serif:"EB Garamond","Hoefler Text",Georgia,"Times New Roman",serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--olive);color:var(--parchment);font-family:var(--serif)}
+  body{display:flex;justify-content:center;gap:0;min-height:100vh;
+       -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  a{color:inherit;text-decoration:none}
+
+  /* ---------- left nav ---------- */
+  .nav{width:248px;flex:0 0 248px;padding:26px 18px;position:sticky;top:0;height:100vh;
+       border-right:1px solid var(--olive-line);display:flex;flex-direction:column}
+  .brand{display:flex;align-items:center;gap:10px;font-size:34px;letter-spacing:.5px;
+         padding:6px 10px 22px}
+  .brand .stars{color:var(--stone);font-size:18px;letter-spacing:2px}
+  .nav a.item{display:flex;align-items:center;gap:14px;padding:11px 14px;border-radius:12px;
+       font-size:21px;color:var(--parchment-dim);transition:.15s}
+  .nav a.item .ic{width:20px;text-align:center;color:var(--stone);font-size:16px}
+  .nav a.item:hover{background:var(--card-hover)}
+  .nav a.item.active{color:var(--parchment);background:var(--card)}
+  .nav a.item.active .ic{color:var(--gold)}
+  .compose{margin-top:18px;background:var(--parchment);color:var(--olive);text-align:center;
+       padding:13px;border-radius:14px;font-size:20px;font-weight:600;cursor:pointer}
+  .me{margin-top:auto;display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:12px}
+  .me:hover{background:var(--card-hover)}
+  .ava{width:40px;height:40px;border-radius:50%;background:var(--olive-soft);
+       border:1px solid var(--olive-line);display:flex;align-items:center;justify-content:center;
+       color:var(--stone);flex:0 0 40px}
+  .me .h{font-size:19px}.me .s{font-size:15px;color:var(--stone)}
+
+  /* ---------- center feed ---------- */
+  .feed{width:600px;flex:0 0 600px;border-right:1px solid var(--olive-line);min-height:100vh}
+  .feedhead{position:sticky;top:0;backdrop-filter:blur(8px);background:rgba(79,75,59,.82);
+       border-bottom:1px solid var(--olive-line);padding:18px 22px;display:flex;
+       align-items:center;justify-content:space-between}
+  .feedhead h1{font-size:25px;font-weight:600}
+  .feedhead .sub{font-size:15px;color:var(--stone)}
+  .tabs{display:flex;border-bottom:1px solid var(--olive-line)}
+  .tabs .t{flex:1;text-align:center;padding:14px;color:var(--stone);font-size:18px;cursor:pointer}
+  .tabs .t.on{color:var(--parchment);box-shadow:inset 0 -2px 0 var(--gold)}
+
+  .post{padding:18px 22px;border-bottom:1px solid var(--olive-line);display:flex;gap:14px;
+        transition:.15s}
+  .post:hover{background:var(--card)}
+  .src{width:44px;height:44px;border-radius:50%;flex:0 0 44px;display:flex;align-items:center;
+       justify-content:center;font-size:18px;border:1px solid var(--olive-line)}
+  .src.rss{background:#6b5d34;color:#e7d6a3}
+  .src.reddit{background:#7a4632;color:#f2c2ad}
+  .src.nyt{background:#3f3c30;color:#e9e7df}
+  .post .body{flex:1;min-width:0}
+  .meta{display:flex;align-items:center;gap:7px;font-size:16px;color:var(--stone);flex-wrap:wrap}
+  .meta .name{color:var(--parchment);font-weight:600;font-size:17px}
+  .meta .badge{font-size:13px;color:var(--parchment-dim);border:1px solid var(--olive-line);
+       padding:1px 8px;border-radius:20px}
+  .dot{color:var(--stone-dim)}
+  .title{font-size:21px;line-height:1.25;margin:5px 0 4px}
+  .excerpt{font-size:17px;line-height:1.45;color:var(--parchment-dim)}
+  .thumb{margin-top:11px;height:168px;border-radius:14px;border:1px solid var(--olive-line);
+       background:linear-gradient(135deg,#5a5640,#46422f);display:flex;align-items:center;
+       justify-content:center;color:var(--stone);font-size:15px}
+  .actions{display:flex;align-items:center;gap:30px;margin-top:13px;color:var(--stone);font-size:16px}
+  .act{display:flex;align-items:center;gap:7px;cursor:pointer;transition:.15s}
+  .act:hover{color:var(--parchment)}
+  .act.saved{color:var(--gold)}
+  .score{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:15px;color:var(--stone)}
+  .score b{color:var(--gold);font-weight:600}
+  .meter{width:64px;height:5px;border-radius:4px;background:var(--olive-line);overflow:hidden}
+  .meter i{display:block;height:100%;background:var(--gold)}
+
+  /* ---------- right rail ---------- */
+  .rail{width:330px;flex:0 0 330px;padding:24px 22px}
+  .panel{background:var(--card);border:1px solid var(--olive-line);border-radius:18px;
+       padding:18px 20px;margin-bottom:20px}
+  .panel h3{font-size:20px;margin-bottom:6px}
+  .panel p{font-size:15px;color:var(--stone);line-height:1.45}
+  .ing{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--olive-line)}
+  .ing:last-child{border-bottom:0}
+  .ing .nm{font-size:17px}.ing .ct{font-size:14px;color:var(--stone)}
+  .ing .lock{margin-left:auto;font-size:13px;color:var(--stone-dim)}
+  .rate{color:var(--gold);font-size:16px;letter-spacing:3px}
+</style>
+</head>
+<body>
+
+  <!-- LEFT NAV -->
+  <nav class="nav">
+    <div class="brand">skroli <span class="stars">★</span></div>
+    <a class="item active"><span class="ic">★</span> Home</a>
+    <a class="item"><span class="ic">↧</span> Ingestors</a>
+    <a class="item"><span class="ic">✦</span> Enhancers</a>
+    <a class="item"><span class="ic">▢</span> Viewers</a>
+    <a class="item"><span class="ic">✚</span> Quotes</a>
+    <a class="item"><span class="ic">☆</span> Saved</a>
+    <a class="item"><span class="ic">⚙</span> Settings</a>
+    <div class="compose">Refresh feed</div>
+    <div class="me">
+      <div class="ava">★</div>
+      <div><div class="h">you</div><div class="s">@me · local</div></div>
+    </div>
+  </nav>
+
+  <!-- CENTER FEED -->
+  <main class="feed">
+    <div class="feedhead">
+      <div><h1>Home</h1><div class="sub">your custom local internet algorithm</div></div>
+      <div class="rate">★★★★★</div>
+    </div>
+    <div class="tabs">
+      <div class="t on">For you</div>
+      <div class="t">Top scored</div>
+      <div class="t">Latest</div>
+    </div>
+
+    <!-- post 1 -->
+    <article class="post">
+      <div class="src reddit">r/</div>
+      <div class="body">
+        <div class="meta"><span class="name">r/programming</span><span class="dot">·</span>
+          <span>via RSS</span><span class="dot">·</span><span>14m</span>
+          <span class="badge">reddit feed</span></div>
+        <div class="title">A practical guide to writing a small, fast feed ranker</div>
+        <div class="excerpt">Scoring posts doesn't need a model the size of a planet. Here's a
+          tiny recency × source-weight × engagement formula that holds up surprisingly well…</div>
+        <div class="actions">
+          <span class="act">❝ quote</span>
+          <span class="act">☆ save</span>
+          <span class="act">↗ open</span>
+          <span class="score">score <b>0.91</b><span class="meter"><i style="width:91%"></i></span></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- post 2 -->
+    <article class="post">
+      <div class="src nyt">NYT</div>
+      <div class="body">
+        <div class="meta"><span class="name">The New York Times</span><span class="dot">·</span>
+          <span>via RSS</span><span class="dot">·</span><span>1h</span>
+          <span class="badge">world</span></div>
+        <div class="title">The quiet return of the personal feed</div>
+        <div class="excerpt">After a decade of optimized timelines, a small movement of people are
+          rebuilding their own — choosing sources by hand and ranking them on their own terms.</div>
+        <div class="thumb">▢ article image</div>
+        <div class="actions">
+          <span class="act saved">★ saved</span>
+          <span class="act">❝ quote</span>
+          <span class="act">↗ open</span>
+          <span class="score">score <b>0.84</b><span class="meter"><i style="width:84%"></i></span></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- post 3 (with a peer quote) -->
+    <article class="post">
+      <div class="src rss">⤳</div>
+      <div class="body">
+        <div class="meta"><span class="name">Hacker News</span><span class="dot">·</span>
+          <span>via RSS</span><span class="dot">·</span><span>2h</span></div>
+        <div class="title">Show HN: I rebuilt my whole news diet as plain RSS</div>
+        <div class="excerpt">No apps, no notifications, no algorithm I didn't write. Six weeks in and
+          I read less but feel like I know more.</div>
+        <div style="margin-top:11px;border-left:2px solid var(--gold);padding:8px 0 8px 13px">
+          <div class="meta" style="margin-bottom:3px"><span class="name" style="color:var(--gold)">@alice</span>
+            <span class="dot">·</span><span>quoted this</span></div>
+          <div class="excerpt" style="color:var(--parchment)">this is basically what skroli is — glad
+            someone wrote it down 👏</div>
+        </div>
+        <div class="actions">
+          <span class="act">❝ quote</span>
+          <span class="act">☆ save</span>
+          <span class="act">↗ open</span>
+          <span class="score">score <b>0.78</b><span class="meter"><i style="width:78%"></i></span></span>
+        </div>
+      </div>
+    </article>
+
+    <!-- post 4 -->
+    <article class="post">
+      <div class="src reddit">r/</div>
+      <div class="body">
+        <div class="meta"><span class="name">r/selfhosted</span><span class="dot">·</span>
+          <span>via RSS</span><span class="dot">·</span><span>3h</span>
+          <span class="badge">reddit feed</span></div>
+        <div class="title">Weekly thread: what are you self-hosting this week?</div>
+        <div class="excerpt">Lots of people moving feeds, photos, and notes off the big platforms.
+          Drop your stack and what finally pushed you to host it yourself.</div>
+        <div class="actions">
+          <span class="act">❝ quote</span>
+          <span class="act">☆ save</span>
+          <span class="act">↗ open</span>
+          <span class="score">score <b>0.66</b><span class="meter"><i style="width:66%"></i></span></span>
+        </div>
+      </div>
+    </article>
+  </main>
+
+  <!-- RIGHT RAIL -->
+  <aside class="rail">
+    <div class="panel">
+      <h3>Your algorithm</h3>
+      <p>Built from <b style="color:var(--parchment)">1 ingestor</b>,
+        <b style="color:var(--parchment)">1 enhancer</b>,
+        <b style="color:var(--parchment)">1 viewer</b>. Simple, as it should be.</p>
+    </div>
+    <div class="panel">
+      <h3>Ingestors</h3>
+      <div class="ing"><span class="src rss" style="width:34px;height:34px;flex-basis:34px;font-size:14px">⤳</span>
+        <div><div class="nm">RSS</div><div class="ct">7 feeds · 3 subreddits</div></div>
+        <span class="lock">built-in</span></div>
+      <div class="ing"><span class="src" style="width:34px;height:34px;flex-basis:34px;font-size:13px;color:var(--stone)">+</span>
+        <div><div class="nm" style="color:var(--stone)">Add ingestor</div>
+          <div class="ct">from the addon store</div></div></div>
+    </div>
+    <div class="panel">
+      <h3>Top scored today</h3>
+      <p style="color:var(--parchment)">A practical guide to writing a small, fast feed ranker</p>
+      <div class="rate" style="margin-top:6px">★★★★★</div>
+    </div>
+  </aside>
+
+</body>
+</html>
