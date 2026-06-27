@@ -407,6 +407,49 @@ Logical entities skroli manages. Field lists are the essentials, not exhaustive.
 | 3  | **First addons**         | A reference ingestor, enhancer, and viewer to prove the model. |
 | 3b | **Themes**               | CSS-only skins on built-in viewers (safe, no code).            |
 | 3c | **Custom UI sandbox**    | Isolated full viewers & custom config screens with the host bridge. |
+
+---
+
+## 13. Design Language
+
+The app's own chrome (everything outside a custom viewer) must match the look of
+the README artwork: calm, minimal, editorial.
+
+### 13.1 Palette (sampled from the README artwork)
+
+| Token        | Hex       | Use                                      |
+|--------------|-----------|------------------------------------------|
+| `olive`      | `#4f4b3b` | Primary background.                       |
+| `parchment`  | `#ffffff` | Wordmark, primary text on olive.         |
+| `stone`      | `#959389` | Stars, muted text, dividers, icons.      |
+| `stone-dim`  | `#8c8a7f` | Secondary muted accents.                  |
+
+(Exact values are taken from the source PNGs; treat them as the canonical
+tokens.)
+
+### 13.2 Typography
+
+- A classic **serif** for the wordmark and headings, matching the README
+  (lowercase `skroli` wordmark, serif section labels).
+- Until the exact face is pinned, use an open web serif that closely matches —
+  **EB Garamond** or **Lora** — bundled with the app so rendering is consistent
+  offline. The final face is a design decision to confirm.
+- Body/UI text may use the same serif or a quiet companion; keep it editorial,
+  not chrome-heavy.
+
+### 13.3 Motifs
+
+- The **star** is the recurring motif (it appears as bullets, source markers,
+  and the rating row in the artwork). Reuse it as skroli's iconography.
+- Generous spacing, flat surfaces, no heavy borders or shadows — let the olive
+  field and serif type carry the identity.
+
+### 13.4 Scope
+
+This design language governs skroli's **built-in viewer, settings, store, and
+window chrome**. Custom viewers (§3.3) are free to look like anything; only the
+host chrome around them must stay on-brand (including the "third-party viewer"
+badge from §3.6).
 | 4  | **Saves**                | Save/unsave items; saved items persist past retention.         |
 | 5  | **Quotes**               | Create and view quotes on items.                               |
 | 6  | **Federation accounts**  | skroli IDs; quotes & saves stored and synced per user.         |
