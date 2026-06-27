@@ -344,6 +344,35 @@ def _parse_weights(raw: str) -> dict[str, float]:
     return weights
 
 
+def _clean_subreddit(value: str) -> str:
+    sub = value.strip().removeprefix("/r/").removeprefix("r/").strip("/")
+    if "/" in sub:
+        raise ValueError(f"Subreddit must be a name, not a path: {value}")
+    return sub
+
+
+def _parse_weights(raw: str) -> dict[str, float]:
+    weights: dict[str, float] = {}
+    for lineno, line in enumerate(raw.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(f"Weight line {lineno} must use: source = multiplier")
+        source, value = line.split("=", 1)
+        source = source.strip().strip('\"\'')
+        if not source:
+            raise ValueError(f"Weight line {lineno} is missing a source")
+        try:
+            weight = float(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"Weight line {lineno} has an invalid multiplier") from exc
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError(f"Weight line {lineno} multiplier must be a positive number")
+        weights[source] = weight
+    return weights
+
+
 def render_page(items: list[Item], rss: RssConfig, score: ScoreConfig) -> str:
     counts = Counter(it.source for it in items)
     sources = "".join(
