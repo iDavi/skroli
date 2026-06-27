@@ -2,3 +2,5 @@
 
 
 # Your custom internet algorithm
+
+<img width="2736" height="729" alt="Group 7 (3)" src="https://github.com/user-attachments/assets/a46820ec-8d14-426f-ae82-4206ccfac1bd" />
