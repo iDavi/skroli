@@ -131,8 +131,11 @@ a{color:inherit;text-decoration:none}
 .savemsg{font-size:13px;color:var(--stone)}
 
 /* ---------- right rail (home only) ---------- */
-.rail{width:330px;flex:0 0 330px;padding:20px 22px;display:none}
-body.home .rail{display:block}
+/* Rail column is always reserved so switching tabs never reflows the layout
+   (otherwise the centered body re-centers and the sidebar appears to move). */
+.rail{width:330px;flex:0 0 330px;padding:20px 22px}
+.rail .panel{display:none}
+body.home .rail .panel{display:block}
 .panel{border:1px solid var(--olive-line);padding:0 16px;margin-bottom:18px}
 .panel h3{font-size:13px;padding:14px 0 4px;color:var(--stone);font-weight:600;
  text-transform:uppercase;letter-spacing:.6px}
