@@ -6,210 +6,180 @@
 
 ## 1. Overview
 
-**skroli** is a self-hosted, personal content feed aggregator. It pulls content from multiple internet sources (ingestors), runs it through an AI-powered enhancement pipeline (enhancers), and presents a ranked, enriched, summarized feed to the user (viewer).
+**skroli** is a self-hosted pipeline framework for building a personal content feed. It provides a structured runtime that orchestrates three stages — ingest, enhance, view — but supplies **no implementations** of those stages itself.
 
-The core promise: you own the algorithm. No engagement optimization, no ads, no opaque ranking. Just your sources, your rules, running locally.
+The user writes (or installs) their own:
+- **ingestors** — fetch content from wherever they want
+- **enhancers** — process, rank, enrich, or filter that content
+- **viewer** — display the final feed however they like
+
+skroli's job is to wire them together, run them on schedule, and pass data between them reliably.
 
 ---
 
 ## 2. Architecture
 
-The system has three layers, as shown in the README diagram:
-
 ```
 [ ingestors ]  →→→  [ enhancers ]  →→→  [ viewer ]
-  Reddit               priority              feed UI
-  Twitter/X            enrichment
-  NYT / RSS            summarization
-  (extensible)
+  user-defined        user-defined        user-defined
 ```
+
+Each stage is a defined interface. skroli calls them in order, handles scheduling, deduplication, storage, and inter-stage data passing.
 
 ---
 
-## 3. Ingestors
+## 3. Plugin Interfaces
 
-Ingestors are adapters that pull raw content from external sources and normalize it into a common `Item` schema.
+### 3.1 Ingestor
 
-### 3.1 Built-in Ingestors
+An ingestor is any module that implements:
 
-| Ingestor    | Source         | Protocol       |
-|-------------|----------------|----------------|
-| Reddit      | reddit.com     | Reddit API / RSS |
-| Twitter/X   | x.com          | Twitter API v2 |
-| NYT         | nytimes.com    | RSS / Article API |
+```ts
+interface Ingestor {
+  name: string
+  fetch(): Promise<Item[]>
+}
+```
 
-### 3.2 Extensibility
+It is called by the skroli runtime on each poll cycle and must return a list of `Item` objects.
 
-Any source that can produce a list of `Item` objects qualifies as an ingestor. Users should be able to add custom ingestors via config (e.g., any RSS/Atom feed URL).
+### 3.2 Enhancer
 
-### 3.3 Item Schema
+An enhancer is any module that implements:
 
-Every ingestor outputs items conforming to this shape:
+```ts
+interface Enhancer {
+  name: string
+  enhance(items: Item[]): Promise<Item[]>
+}
+```
+
+Enhancers run in sequence. Each receives the full item list (as modified by all previous enhancers) and returns a new list. An enhancer may add fields, drop items, reorder, or mutate in any way.
+
+### 3.3 Viewer
+
+A viewer is any module that implements:
+
+```ts
+interface Viewer {
+  name: string
+  render(items: Item[]): void | Promise<void>
+}
+```
+
+It is called once after the enhancer pipeline completes, receiving the final item list. What it does with them — serve a web UI, write to a file, send a notification — is entirely up to the user.
+
+---
+
+## 4. Item Schema
+
+The `Item` is the common data contract passed between all stages. It has a required core and an open `meta` bag for user-defined fields.
 
 ```ts
 interface Item {
-  id: string           // unique, stable identifier
-  source: string       // e.g. "reddit", "twitter", "nyt"
-  url: string          // canonical link to the content
+  id: string           // unique, stable identifier (user-assigned)
+  source: string       // ingestor name that produced this item
+  url: string          // canonical link
   title: string
-  body?: string        // full text or excerpt if available
+  body?: string        // content text, if available
   author?: string
   published_at: Date
-  raw: unknown         // original source payload, for debugging
+  meta: Record<string, unknown>  // arbitrary fields added by enhancers
 }
 ```
 
-### 3.4 Behavior
-
-- Ingestors run on a configurable polling interval (default: 15 minutes).
-- Deduplication is handled by `id` before items enter the enhancer pipeline.
-- Items older than a configurable TTL (default: 48 hours) are discarded before enhancement.
+Enhancers should write their outputs into `meta` rather than inventing new top-level fields, unless the field is universally meaningful.
 
 ---
 
-## 4. Enhancers
+## 5. Runtime Behavior
 
-Enhancers process a batch of new `Item` objects and produce enriched `EnhancedItem` objects. They answer three questions per item (or per batch):
+### 5.1 Poll Cycle
 
-1. **What is more important?** — prioritization / ranking
-2. **What can we add?** — enrichment (related links, context, metadata)
-3. **How can we summarize?** — condensed, readable summary
+On each cycle (configurable interval, default: 15 minutes):
 
-### 4.1 Enhancer Pipeline
+1. Call every registered ingestor's `fetch()` in parallel.
+2. Merge all returned items into one list.
+3. Deduplicate by `id` against the local store; discard already-seen items.
+4. Discard items older than the configured TTL.
+5. Pass surviving items through the enhancer chain sequentially.
+6. Persist the final enhanced items.
+7. Call the viewer's `render()` with all current items (not just new ones).
 
-Enhancers run sequentially in a defined pipeline. Each enhancer receives the output of the previous one.
+### 5.2 Deduplication
 
-```
-items[]  →  [Ranker]  →  [Enricher]  →  [Summarizer]  →  enhanced_items[]
-```
+Items are deduplicated by `id`. Once an item is stored, it will not be passed to the enhancer pipeline again, even if a future ingestor returns it.
 
-### 4.2 Ranker
+### 5.3 Storage
 
-- Assigns a numeric `score` (0–1) to each item.
-- Default signal: recency × source weight × engagement (upvotes, retweets, etc.).
-- User-defined source weights configurable in `skroli.config` (e.g., NYT weight: 0.8, Twitter weight: 0.5).
-- Items below a configurable score threshold are dropped.
-
-### 4.3 Enricher
-
-- Optionally fetches the full article body if `body` is absent (via readability extraction).
-- Adds `tags` derived from content (keyword extraction).
-- Optionally links related items from the same session batch.
-
-### 4.4 Summarizer
-
-- Produces a short `summary` (2–4 sentences) for each item.
-- Runs via a local LLM (e.g., Ollama + llama3) or a configured API (e.g., Claude).
-- Summary is stored alongside the item; original `body` is preserved.
-- Summarization is skipped if `body` is too short (< 200 chars).
-
-### 4.5 EnhancedItem Schema
-
-```ts
-interface EnhancedItem extends Item {
-  score: number          // 0–1 ranking score
-  summary?: string       // AI-generated summary
-  tags: string[]         // extracted topics/keywords
-  related?: string[]     // IDs of related items in same batch
-}
-```
-
----
-
-## 5. Viewer
-
-The viewer is the user-facing interface that renders the enhanced feed.
-
-### 5.1 Display
-
-- Items displayed in descending score order.
-- Each card shows: title, source badge, published time (relative), summary, tags, and a link to the original.
-- Full body readable inline (collapsed by default).
-
-### 5.2 Interactions
-
-- **Star** an item to save it permanently (items otherwise expire by TTL).
-- **Dismiss** an item to hide it and down-weight similar content in future runs.
-- **Filter** by source, tag, or date range.
-- **Search** across current items (local full-text).
-
-### 5.3 Interface Type
-
-The viewer should be a **local web UI** (served on `localhost`) for broad accessibility. A terminal UI (TUI) is a secondary option for power users.
+skroli maintains a local SQLite store of all items. This is an implementation detail of the runtime — ingestors, enhancers, and viewers do not interact with it directly.
 
 ---
 
 ## 6. Configuration
 
-All user configuration lives in a single file: `skroli.config.toml` (or `.json`).
+All wiring lives in `skroli.config.toml`.
 
 ```toml
+[runtime]
+poll_interval_minutes = 15
+ttl_hours = 48
+
 [ingestors]
-  [[ingestors.feeds]]
-    type = "rss"
-    url = "https://example.com/feed.xml"
-    weight = 0.7
-
-  [[ingestors.reddit]]
-    subreddits = ["programming", "science"]
-    weight = 0.6
-
-  [[ingestors.twitter]]
-    lists = ["my-list-id"]
-    weight = 0.5
+  # paths or module references to user-defined ingestors
+  modules = [
+    "./my_ingestors/reddit.py",
+    "./my_ingestors/rss.py",
+  ]
 
 [enhancers]
-  score_threshold = 0.3
-  ttl_hours = 48
-  summarizer = "ollama"          # "ollama" | "claude" | "openai" | "none"
-  summarizer_model = "llama3"
+  # run in order
+  modules = [
+    "./my_enhancers/ranker.py",
+    "./my_enhancers/summarizer.py",
+  ]
 
 [viewer]
-  port = 4242
-  theme = "dark"
-  items_per_page = 30
+  module = "./my_viewer/web.py"
 ```
 
 ---
 
 ## 7. Data Storage
 
-- Local SQLite database for items, enhanced metadata, starred items, and dismissals.
-- No cloud sync by default; data stays on the user's machine.
-- Optional export to JSON for backup or portability.
+- Local SQLite database managed entirely by the skroli runtime.
+- Stores all items (post-enhancement) for the duration of their TTL.
+- Users can query it directly for advanced use cases, but the schema is considered internal.
+- Optional JSON export for backup or portability.
 
 ---
 
-## 8. Tech Stack (Recommended)
+## 8. Non-Goals
 
-| Layer        | Choice                              | Rationale                                  |
-|--------------|-------------------------------------|--------------------------------------------|
-| Runtime      | Python 3.11+                        | Rich ecosystem for scraping, NLP, LLMs     |
-| Scheduler    | APScheduler or cron                 | Simple polling loop                        |
-| Storage      | SQLite (via SQLModel / SQLAlchemy)  | Zero-dependency local DB                  |
-| Web UI       | FastAPI + HTMX or a minimal React   | Simple, fast, avoids heavy SPA boilerplate |
-| LLM          | Ollama (local) or Claude API        | User's choice; local-first                 |
-| Config       | TOML                                | Human-readable, no surprises               |
+- skroli ships **no built-in ingestors, enhancers, or viewers**.
+- No cloud sync, user accounts, or multi-user support.
+- No opinion on how items are ranked, displayed, or filtered — that is the user's domain.
 
 ---
 
-## 9. Non-Goals
+## 9. Tech Stack (Recommended)
 
-- No user accounts or multi-user support (single local user).
-- No mobile app (responsive web UI covers mobile browsers).
-- No social features (sharing, following, comments).
-- No cloud hosting or SaaS offering.
+| Layer     | Choice                             | Rationale                              |
+|-----------|------------------------------------|----------------------------------------|
+| Runtime   | Python 3.11+                       | Easy to write plugins in; rich stdlib  |
+| Scheduler | APScheduler                        | Embedded, no external daemon needed    |
+| Storage   | SQLite (via SQLModel)              | Zero-dependency local DB               |
+| Config    | TOML                               | Human-readable, widely supported       |
 
 ---
 
 ## 10. Milestones
 
-| # | Milestone                          | Scope                                              |
-|---|------------------------------------|----------------------------------------------------|
-| 1 | **Core pipeline (no UI)**          | Reddit ingestor + ranker + SQLite storage          |
-| 2 | **Basic viewer**                   | Local web UI serving ranked feed                   |
-| 3 | **More ingestors**                 | Twitter, NYT, generic RSS                          |
-| 4 | **Summarizer**                     | Ollama integration, summary cards in UI            |
-| 5 | **User interactions**              | Star, dismiss, filter, search                      |
-| 6 | **Config-driven weights**          | Full `skroli.config.toml` support                  |
-| 7 | **Polish**                         | TUI option, export, theme, onboarding              |
+| # | Milestone                        | Scope                                                        |
+|---|----------------------------------|--------------------------------------------------------------|
+| 1 | **Plugin interfaces**            | Define `Ingestor`, `Enhancer`, `Viewer`, `Item` contracts    |
+| 2 | **Runtime skeleton**             | Poll loop, dedup, SQLite storage, config loading             |
+| 3 | **Plugin loading**               | Dynamically load user modules from config paths              |
+| 4 | **CLI**                          | `skroli run`, `skroli status`, `skroli reset`                |
+| 5 | **Error isolation**              | Ingestor/enhancer errors don't crash the pipeline            |
+| 6 | **Dev experience**               | Hot reload for plugins, verbose logging mode, example plugins |
