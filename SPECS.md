@@ -2,302 +2,341 @@
 
 > Your custom local internet algorithm. Simple, as it should be.
 
+This document describes **what skroli does** — its features, behavior, and data
+model. It deliberately avoids prescribing tech stack, frameworks, transport,
+storage engines, or other architecture decisions; those are made during
+development.
+
 ---
 
 ## 1. Overview
 
-**skroli** is a self-hosted pipeline framework for building a personal content feed. It provides a structured runtime that orchestrates three stages — ingest, enhance, view — but supplies **no implementations** of those stages itself.
+**skroli** is a personal content feed you control. Instead of an opaque
+algorithm deciding what you see, you assemble your own from small parts:
 
-The user writes (or installs) their own:
-- **ingestors** — fetch content from wherever they want
-- **enhancers** — process, rank, enrich, or filter that content
-- **viewer** — display the final feed however they like
+- **ingestors** pull content from sources you choose,
+- **enhancers** rank, enrich, and filter it,
+- a **viewer** shows you the result.
 
-skroli's job is to wire them together, run them on schedule, and pass data between them reliably.
+These parts are **addons** — installable from the **skroli addon store**, or
+written by the user. skroli's job is to run them in order, on a schedule, and
+keep the data flowing between them.
 
-skroli is **local-first, but not local-only**. The pipeline (ingest → enhance → view) runs locally, but two pieces of user-generated data live on a shared server — the **skroli federation**:
-
-- **quotes** — short personal annotations on items, like a Twitter quote-tweet.
-- **saves** — items the user has saved for keeping.
-
-Storing these in the federation is what makes sharing possible: quotes and saves are private by default, but a user can share their ID and, by mutual consent, let others pull their shared quotes/saves into their own feeds. See [§6 Quotes, Saves & the Federation](#6-quotes-saves--the-federation).
-
----
-
-## 2. Architecture
-
-```
-                    ┌─────────────────────────────┐
-   local instance   │   [ingestors] → [enhancers] → [viewer]   │
-                    │              │                            │
-                    └──────────────┼────────────────────────────┘
-                                   │  quotes & saves
-                                   ▼
-                       ╔══════════════════════╗
-                       ║   skroli federation  ║   ← shared server
-                       ║  (quotes + saves)    ║
-                       ╚══════════════════════╝
-```
-
-- The **local instance** owns the pipeline: user-defined ingestors, enhancers, and viewer. skroli calls them in order, handles scheduling, deduplication, local item storage, and inter-stage data passing.
-- The **skroli federation** is a server that stores users' quotes and saves and serves them — to their owner always, and to consenting peers on request.
+On top of the local feed, skroli adds a light social layer: you can **quote**
+and **save** items. These are stored in the **skroli federation** so they
+persist, follow you across devices, and — with consent — can be shared with
+other people, whose quotes and saves can then flow into your feed.
 
 ---
 
-## 3. Plugin Interfaces
+## 2. Core Concepts
 
-### 3.1 Ingestor
+| Concept        | What it is                                                        |
+|----------------|------------------------------------------------------------------|
+| **Item**       | A single piece of content in the feed (a post, article, tweet…). |
+| **Ingestor**   | An addon that fetches items from a source.                       |
+| **Enhancer**   | An addon that processes items (rank, enrich, summarize, filter). |
+| **Viewer**     | An addon that displays the final feed.                           |
+| **Addon**      | Any installable ingestor, enhancer, or viewer.                   |
+| **Addon store**| Where addons are published, discovered, and installed.           |
+| **Quote**      | A short personal annotation attached to an item.                 |
+| **Save**       | An item the user has kept.                                       |
+| **Federation** | The shared service that stores quotes, saves, and social links.  |
+| **Peer**       | Another skroli user you've connected with.                       |
 
-An ingestor is any module that implements:
+The feed pipeline runs locally. Quotes, saves, and social connections live in
+the federation.
 
-```ts
-interface Ingestor {
-  name: string
-  fetch(): Promise<Item[]>
-}
 ```
-
-It is called by the skroli runtime on each poll cycle and must return a list of `Item` objects.
-
-### 3.2 Enhancer
-
-An enhancer is any module that implements:
-
-```ts
-interface Enhancer {
-  name: string
-  enhance(items: Item[]): Promise<Item[]>
-}
+        sources                addons run locally               you
+   ┌──────────────┐      ┌────────────────────────────┐
+   │ reddit, x,    │ ──▶  │ ingestors → enhancers →     │ ──▶  viewer
+   │ rss, …        │      │            ↑    feed         │
+   └──────────────┘      └────────────┼───────────────┘
+                                       │ quotes & saves
+                                       ▼
+                              ┌──────────────────┐
+                              │  skroli federation │  ◀──▶ peers
+                              └──────────────────┘
 ```
-
-Enhancers run in sequence. Each receives the full item list (as modified by all previous enhancers) and returns a new list. An enhancer may add fields, drop items, reorder, or mutate in any way.
-
-### 3.3 Viewer
-
-A viewer is any module that implements:
-
-```ts
-interface Viewer {
-  name: string
-  render(items: Item[]): void | Promise<void>
-}
-```
-
-It is called once after the enhancer pipeline completes, receiving the final item list. What it does with them — serve a web UI, write to a file, send a notification — is entirely up to the user.
 
 ---
 
-## 4. Item Schema
+## 3. Addons
 
-The `Item` is the common data contract passed between all stages. It has a required core and an open `meta` bag for user-defined fields.
+An addon is a unit of functionality the user installs into their skroli. There
+are three kinds.
 
-```ts
-interface Item {
-  id: string           // unique, stable identifier (user-assigned)
-  source: string       // ingestor name that produced this item
-  url: string          // canonical link
-  title: string
-  body?: string        // content text, if available
-  author?: string
-  published_at: Date
-  meta: Record<string, unknown>  // arbitrary fields added by enhancers
-  quotes: Quote[]                // annotations on this item (own + peers')
-  saved: boolean                 // whether the user has saved this item
-}
-```
+### 3.1 Ingestors
 
-Enhancers should write their outputs into `meta` rather than inventing new top-level fields, unless the field is universally meaningful.
+- Fetch content from a source and produce `Item`s.
+- Run on every poll cycle.
+- May require user-supplied settings (e.g. a subreddit list, an account handle,
+  a feed URL, an API key).
+- Examples: Reddit, Twitter/X, an RSS/Atom feed, a newsletter, a website.
 
-The `quotes` array and `saved` flag are managed by the runtime (backed by the federation), not by enhancers. Enhancers may *read* them (e.g. boost an item's score because a trusted peer quoted it) but should not mutate them.
+### 3.2 Enhancers
+
+- Receive the current batch of items and return a modified batch.
+- Run **in a user-defined order**, each seeing the previous one's output.
+- Can do anything: score/rank, deduplicate, summarize, tag, translate, filter
+  out unwanted items, group related items, etc.
+- May read an item's quotes and saves to inform their work (e.g. rank an item
+  higher because a trusted peer quoted it) but must not modify them.
+
+### 3.3 Viewers
+
+- Receive the final, enhanced feed and present it.
+- Run once per cycle, after enhancers.
+- Examples: a local web UI, a terminal feed, a daily email digest, a static
+  page, a notification.
+
+### 3.4 Addon Capabilities
+
+Every addon declares:
+
+- a **type** (ingestor / enhancer / viewer),
+- a **name** and **version**,
+- the **settings** it accepts (with types, defaults, and whether each is
+  required or secret),
+- the **permissions** it needs (network access, federation access, filesystem
+  access).
+
+skroli surfaces required settings to the user at install time and refuses to run
+an addon that is missing required settings.
 
 ---
 
-## 5. Runtime Behavior
+## 4. The Item
+
+The item is the common data passed between every stage.
+
+| Field          | Description                                              |
+|----------------|----------------------------------------------------------|
+| `id`           | Stable unique identifier (used for deduplication).       |
+| `source`       | Which ingestor produced it.                              |
+| `url`          | Canonical link to the original content.                  |
+| `title`        | Headline / title.                                        |
+| `body`         | Full text or excerpt, if available.                      |
+| `author`       | Original author, if known.                               |
+| `published_at` | When the content was originally published.               |
+| `meta`         | Open key/value bag for fields added by enhancers.        |
+| `quotes`       | Quotes attached to this item (the user's and peers').    |
+| `saved`        | Whether the user has saved this item.                    |
+
+Enhancers add their own data to `meta`. The `quotes` and `saved` fields are
+populated by skroli from the federation and are read-only to addons.
+
+---
+
+## 5. The Feed Pipeline
 
 ### 5.1 Poll Cycle
 
-On each cycle (configurable interval, default: 15 minutes):
+skroli refreshes the feed on a configurable interval. Each cycle:
 
-1. Call every registered ingestor's `fetch()` in parallel.
-2. Merge all returned items into one list.
-3. Deduplicate by `id` against the local store; discard already-seen items.
-4. Discard items older than the configured TTL.
-5. Sync with the federation: pull the user's own quotes/saves and any shared quotes/saves from accepted peers, then attach them to matching items (see [§6.5](#65-syncing-quotes--saves)).
-6. Pass surviving items through the enhancer chain sequentially.
-7. Persist the final enhanced items locally.
-8. Call the viewer's `render()` with all current items (not just new ones).
+1. Runs every installed ingestor to fetch fresh items.
+2. Merges results into one list.
+3. Drops items already seen (by `id`) and items older than the configured
+   retention window.
+4. Syncs quotes and saves from the federation and attaches them to matching
+   items (own records always; peers' shared records where connected).
+5. Runs the enhancer chain in order.
+6. Stores the resulting feed.
+7. Hands the final feed to the viewer.
 
-### 5.2 Deduplication
+### 5.2 Deduplication & Retention
 
-Items are deduplicated by `id`. Once an item is stored, it will not be passed to the enhancer pipeline again, even if a future ingestor returns it.
+- An item is processed once; if an ingestor returns it again, it's ignored.
+- Items older than the retention window are removed from the feed. Saving an item
+  keeps it regardless of retention.
 
-### 5.3 Storage
+### 5.3 Resilience
 
-skroli maintains a local SQLite store of all items. This is an implementation detail of the runtime — ingestors, enhancers, and viewers do not interact with it directly. Quotes and saves are **not** stored here; they live in the federation (see [§6](#6-quotes-saves--the-federation)) and are synced into items at runtime.
-
----
-
-## 6. Quotes, Saves & the Federation
-
-While the pipeline runs locally, two kinds of user-generated data are stored on the **skroli federation** — a shared server:
-
-- A **quote** is a short personal annotation on an item — a reaction, a note, a counterpoint (like a Twitter quote-tweet).
-- A **save** is an item the user has marked to keep.
-
-Putting these in the federation gives them a durable home independent of any single item's TTL, lets the user see them across devices, and — crucially — makes consent-based sharing possible.
-
-### 6.1 Schemas
-
-```ts
-interface Quote {
-  id: string           // unique quote identifier
-  item_id: string      // the Item this quote is attached to
-  item_url: string     // canonical link, so the quote is meaningful even if
-                       //   a recipient hasn't ingested the original item
-  author_id: string    // skroli ID of the quote's author
-  text: string         // the annotation itself
-  created_at: Date
-  visibility: "private" | "shared"   // default: "private"
-}
-
-interface Save {
-  id: string
-  item_id: string
-  item_url: string
-  item_title: string   // snapshot, so a save is readable on its own
-  author_id: string    // skroli ID of the user who saved it
-  created_at: Date
-  visibility: "private" | "shared"   // default: "private"
-}
-```
-
-### 6.2 Identity
-
-- Each user has a **skroli ID**: a stable account on the federation, plus a keypair held by their local instance.
-- The skroli ID is what a user shares to let others request their quotes/saves.
-- The local instance signs writes to the federation so authorship can be verified and quotes/saves can't be forged.
-
-### 6.3 Visibility
-
-- Quotes and saves are **private by default**. Private records are stored on the federation but served only to their owner.
-- A user can mark individual records (or set a default) as **shared**. Only shared records are eligible to be served to accepted peers.
-
-### 6.4 Sharing Handshake
-
-Sharing is mutual and consent-based, mediated by the federation:
-
-1. **A** shares their skroli ID with **B** (out of band — link, QR, message).
-2. **B** sends a follow request to **A** through the federation.
-3. **A** accepts (or rejects) the request. Acceptance is explicit.
-4. Once accepted, the federation serves **A**'s *shared* quotes and saves to **B** on sync.
-
-Either side can revoke at any time; revocation stops future sharing and is the user's to make.
-
-### 6.5 Syncing Quotes & Saves
-
-On each poll cycle the local runtime syncs with the federation:
-
-- Pulls the user's **own** quotes and saves and applies them to matching items (sets `saved`, fills `quotes[]`).
-- Pulls **shared** quotes and saves from accepted peers and attaches them to matching items by `item_id`/`item_url`. If the user hasn't ingested an item, the runtime may create a stub `Item` from the stored `item_url`/`item_title` so the record still surfaces.
-- Pushes the user's newly created quotes/saves up to the federation.
-- Peer records are shown to enhancers and the viewer just like the user's own, but are clearly attributed to their author.
-
-### 6.6 Privacy & Trust
-
-- A peer can only ever receive records explicitly marked `shared` by an author who has accepted them.
-- The federation enforces visibility and follow relationships server-side; clients also verify signatures and reject forged or mis-signed records.
-- Private quotes and saves are never served to anyone but their owner.
+- A failing ingestor, enhancer, or viewer must not crash the cycle. skroli logs
+  the failure, skips that addon for the cycle, and continues with the rest.
 
 ---
 
-## 7. Configuration
+## 6. Quotes & Saves
 
-All wiring lives in `skroli.config.toml`.
+### 6.1 Quotes
 
-```toml
-[runtime]
-poll_interval_minutes = 15
-ttl_hours = 48
+- A quote is a short note the user attaches to an item — a reaction, comment, or
+  counterpoint (like a quote-tweet).
+- A user can quote any item in their feed.
+- Quotes are **private by default** and can be marked **shared**.
+- A quote stores enough about its item (link, title) to remain meaningful even to
+  someone who hasn't ingested that item.
 
-[ingestors]
-  # paths or module references to user-defined ingestors
-  modules = [
-    "./my_ingestors/reddit.py",
-    "./my_ingestors/rss.py",
-  ]
+### 6.2 Saves
 
-[enhancers]
-  # run in order
-  modules = [
-    "./my_enhancers/ranker.py",
-    "./my_enhancers/summarizer.py",
-  ]
+- Saving keeps an item permanently, independent of the retention window.
+- Saves are **private by default** and can be marked **shared**.
+- The user can browse, search, and unsave their saved items.
 
-[viewer]
-  module = "./my_viewer/web.py"
+### 6.3 Where They Live
 
-[federation]
-  server = "https://federation.skroli.net"   # or a self-hosted instance
-  id = "@me"                                  # this user's skroli ID
-  default_visibility = "private"              # "private" | "shared"
-  # accepted peers whose shared quotes/saves are synced into the feed
-  peers = [
-    "@alice",
-    "@bob",
-  ]
-```
+- Quotes and saves are stored in the federation, not just locally, so they
+  persist and are available across the user's devices.
+- The local feed reflects them: saved items show as saved, quoted items show
+  their quotes.
 
 ---
 
-## 8. Data Storage
+## 7. Sharing & the Federation
 
-Storage is split across two tiers:
+### 7.1 Identity
 
-**Local (per instance):**
-- SQLite database managed entirely by the skroli runtime.
-- Stores all items (post-enhancement) for the duration of their TTL, plus the user's keypair and a cache of synced quotes/saves.
-- Users can query it directly for advanced use cases, but the schema is considered internal.
-- Optional JSON export for backup or portability.
+- Each user has a **skroli ID** — their account/handle on the federation.
+- The ID is what a user shares so others can connect with them.
 
-**Federation (shared server):**
-- Stores all quotes and saves, the user account/skroli ID, follow relationships, and visibility flags.
-- Enforces visibility and follow rules server-side; serves records only to their owner or to accepted peers.
-- Can be the public skroli federation or a self-hosted instance pointed at via config.
+### 7.2 Connecting with Peers
+
+Connections are mutual and consent-based:
+
+1. A user shares their skroli ID.
+2. Another user sends a connection (follow) request.
+3. The recipient explicitly **accepts or rejects** it.
+4. Once accepted, the requester can receive the other user's **shared** quotes
+   and saves.
+
+Either side can disconnect at any time, which stops further sharing.
+
+### 7.3 Sharing Into the Feed
+
+- When connected, a peer's shared quotes and saves are synced into the user's
+  feed each cycle and attached to the relevant items.
+- If the user hasn't ingested an item a peer quoted/saved, skroli still surfaces
+  the record using the stored link and title.
+- Peer contributions are always clearly **attributed** to their author.
+
+### 7.4 Visibility Rules
+
+- **Private** records are visible only to their owner.
+- **Shared** records are visible only to accepted, connected peers.
+- A user can set a default visibility and override it per record.
+- Changing a record to private, or disconnecting, stops it from being served.
+
+### 7.5 Federation Scope (future)
+
+The federation is intended to be **multi-server**: a user's account lives on one
+server, and connections may span servers (e.g. a user on one server connecting
+to a user on another). Cross-server connection and sharing follow the same
+consent rules. The exact protocol is an implementation decision; the
+**functional requirement** is that connecting and sharing work across servers
+exactly as they do within one.
 
 ---
 
-## 9. Non-Goals
+## 8. The Addon Store
 
-- skroli ships **no built-in ingestors, enhancers, or viewers**.
-- The pipeline and item storage stay local; only quotes and saves leave the machine, to the federation (see [§6](#6-quotes-saves--the-federation)).
-- No opinion on how items are ranked, displayed, or filtered — that is the user's domain.
-- The federation stores quotes and saves only — never the user's raw feed, ingestor credentials, or pipeline data.
+The addon store is where addons are published, discovered, and installed. It is
+what makes skroli extensible without users writing code.
+
+### 8.1 For Users (Consumers)
+
+- **Browse & search** addons by type (ingestor / enhancer / viewer), keyword,
+  category, and popularity.
+- **Addon detail page**: description, screenshots, author, version history,
+  required settings, requested permissions, and ratings/reviews.
+- **Install / update / remove** addons.
+- **Manage settings** for each installed addon, including secrets (API keys),
+  which are stored locally and never sent to the federation or the store.
+- **Review permissions** before install; skroli enforces what an addon is
+  allowed to do.
+- **Rate & review** addons.
+
+### 8.2 For Developers (Publishers)
+
+- **Publish** an addon with a manifest declaring type, name, version, settings
+  schema, permissions, and metadata.
+- **Version** addons; users get update notifications.
+- **Update or unpublish** their addons.
+- Addons are **identified and signed** so users can trust that an update comes
+  from the original author.
+
+### 8.3 Trust & Safety
+
+- Each addon declares the **permissions** it needs; skroli enforces them at
+  runtime.
+- Addons are sandboxed from each other's settings and secrets.
+- The store can flag, rate, and (if needed) remove malicious addons.
+- An addon never gains access to another addon's data, the user's secrets, or the
+  federation unless it explicitly requests and is granted that permission.
 
 ---
 
-## 10. Tech Stack (Recommended)
+## 9. Settings
 
-| Layer            | Choice                             | Rationale                              |
-|------------------|------------------------------------|----------------------------------------|
-| Local runtime    | Python 3.11+                       | Easy to write plugins in; rich stdlib  |
-| Scheduler        | APScheduler                        | Embedded, no external daemon needed    |
-| Local storage    | SQLite (via SQLModel)              | Zero-dependency local DB               |
-| Identity         | ed25519 keypair (PyNaCl/cryptography) | Sign quotes/saves, prove authorship |
-| Config           | TOML                               | Human-readable, widely supported       |
-| Federation server| FastAPI + Postgres                 | Stores quotes/saves, follows, visibility; REST sync API |
+The user configures their skroli through settings covering:
+
+- **Pipeline**: poll interval, retention window, enhancer order.
+- **Installed addons**: which are enabled, and each addon's own settings.
+- **Federation**: the user's server and skroli ID, default visibility, and the
+  list of connected peers.
+
+Settings are persisted and editable. Secrets (API keys, tokens) are stored
+locally and treated as sensitive.
 
 ---
 
-## 11. Milestones
+## 10. Data Model
 
-| # | Milestone                        | Scope                                                        |
-|---|----------------------------------|--------------------------------------------------------------|
-| 1 | **Plugin interfaces**            | Define `Ingestor`, `Enhancer`, `Viewer`, `Item`, `Quote`, `Save` contracts |
-| 2 | **Runtime skeleton**             | Poll loop, dedup, SQLite storage, config loading             |
-| 3 | **Plugin loading**               | Dynamically load user modules from config paths              |
-| 4 | **Federation server (MVP)**      | Accounts/IDs, store private quotes & saves, signed REST sync API |
-| 5 | **Quotes & saves (local)**       | Create quotes and save items; sync own records with federation |
-| 6 | **Sharing**                      | Follow request/accept handshake, shared-record sync, revocation |
-| 7 | **CLI**                          | `skroli run`, `skroli status`, `skroli peer add/accept/revoke` |
-| 8 | **Error isolation**             | Ingestor/enhancer/sync errors don't crash the pipeline       |
-| 9 | **Dev experience**               | Hot reload for plugins, verbose logging mode, example plugins, self-host docs |
+Logical entities skroli manages. Field lists are the essentials, not exhaustive.
+
+### Local
+
+- **Item** — `id`, `source`, `url`, `title`, `body`, `author`, `published_at`,
+  `meta`, `saved`, plus references to its quotes. Lives for the retention window
+  (or forever, if saved).
+- **InstalledAddon** — `id`, `type`, `name`, `version`, `enabled`, `order`
+  (for enhancers), `settings`, `permissions`.
+- **Secret** — addon settings marked sensitive; stored locally only.
+- **UserKey / credentials** — the local identity used to authenticate to the
+  federation.
+
+### Federation
+
+- **Account** — `skroli_id`, profile, the server it belongs to.
+- **Quote** — `id`, `item_url`, `item_title`, `author_id`, `text`,
+  `created_at`, `visibility`.
+- **Save** — `id`, `item_url`, `item_title`, `author_id`, `created_at`,
+  `visibility`.
+- **Connection** — directed link between two accounts with a state
+  (`requested` / `accepted` / `rejected` / `revoked`).
+
+### Store
+
+- **Addon** — `id`, `type`, `name`, `description`, `author`, `category`,
+  `permissions`, `settings_schema`.
+- **AddonVersion** — `addon_id`, `version`, `manifest`, `published_at`,
+  `signature`.
+- **Review** — `addon_id`, `author_id`, `rating`, `text`, `created_at`.
+
+---
+
+## 11. Non-Goals
+
+- skroli does not ship its own ranking or display opinion — that's the user's,
+  expressed through the addons they choose.
+- The federation stores only social data (quotes, saves, connections, accounts)
+  — never the user's raw feed, ingestor credentials, or pipeline internals.
+- Secrets and API keys never leave the user's machine.
+
+---
+
+## 12. Milestones
+
+| #  | Milestone                | Delivers                                                        |
+|----|--------------------------|----------------------------------------------------------------|
+| 1  | **Pipeline core**        | Ingest → enhance → view loop with the `Item` model.            |
+| 2  | **Addon model**          | Install, enable, order, and configure addons with settings.    |
+| 3  | **First addons**         | A reference ingestor, enhancer, and viewer to prove the model. |
+| 4  | **Saves**                | Save/unsave items; saved items persist past retention.         |
+| 5  | **Quotes**               | Create and view quotes on items.                               |
+| 6  | **Federation accounts**  | skroli IDs; quotes & saves stored and synced per user.         |
+| 7  | **Connections & sharing**| Connect with peers; shared quotes/saves flow into the feed.    |
+| 8  | **Addon store**          | Browse, install, update; publish, version, sign addons.        |
+| 9  | **Trust & permissions**  | Permission enforcement, sandboxing, reviews/ratings.           |
+| 10 | **Cross-server**         | Connections and sharing that span federation servers.          |
