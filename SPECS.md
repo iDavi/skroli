@@ -15,6 +15,8 @@ The user writes (or installs) their own:
 
 skroli's job is to wire them together, run them on schedule, and pass data between them reliably.
 
+skroli is **local-first, not local-only**. One built-in capability is federated: users can attach **quotes** to items — short, personal annotations, like a Twitter quote-tweet. Quotes are private by default, but a user can share their peer ID and, by mutual consent, allow others to ingest their quotes into their own feeds. See [§6 Quotes & Peer Sharing](#6-quotes--peer-sharing).
+
 ---
 
 ## 2. Architecture
@@ -85,10 +87,13 @@ interface Item {
   author?: string
   published_at: Date
   meta: Record<string, unknown>  // arbitrary fields added by enhancers
+  quotes: Quote[]                // annotations on this item (own + ingested from peers)
 }
 ```
 
 Enhancers should write their outputs into `meta` rather than inventing new top-level fields, unless the field is universally meaningful.
+
+The `quotes` array is managed by the runtime, not by enhancers. Enhancers may *read* quotes (e.g. to boost an item's score because a trusted peer quoted it) but should not mutate them.
 
 ---
 
@@ -102,9 +107,10 @@ On each cycle (configurable interval, default: 15 minutes):
 2. Merge all returned items into one list.
 3. Deduplicate by `id` against the local store; discard already-seen items.
 4. Discard items older than the configured TTL.
-5. Pass surviving items through the enhancer chain sequentially.
-6. Persist the final enhanced items.
-7. Call the viewer's `render()` with all current items (not just new ones).
+5. Pull new shared quotes from accepted peers and attach them to matching items (see [§6.5](#65-ingesting-peer-quotes)).
+6. Pass surviving items through the enhancer chain sequentially.
+7. Persist the final enhanced items and their quotes.
+8. Call the viewer's `render()` with all current items (not just new ones).
 
 ### 5.2 Deduplication
 
@@ -116,7 +122,63 @@ skroli maintains a local SQLite store of all items. This is an implementation de
 
 ---
 
-## 6. Configuration
+## 6. Quotes & Peer Sharing
+
+A **quote** is a short personal annotation a user attaches to an item — a reaction, a note, a counterpoint. This is the one place skroli reaches beyond the local machine: quotes can be selectively shared with consenting peers and ingested into their feeds.
+
+### 6.1 Quote Schema
+
+```ts
+interface Quote {
+  id: string           // unique quote identifier
+  item_id: string      // the Item this quote is attached to
+  item_url: string     // canonical link, so the quote is meaningful even if
+                       //   the recipient hasn't ingested the original item
+  author_id: string    // peer ID of the quote's author
+  text: string         // the annotation itself
+  created_at: Date
+  visibility: "private" | "shared"   // default: "private"
+}
+```
+
+### 6.2 Peer Identity
+
+- Each skroli instance has a **peer ID**: a stable, self-generated public identifier (e.g. a public-key fingerprint).
+- The peer ID is what a user shares to let others request their quotes.
+- The corresponding private key signs outgoing quotes so recipients can verify authorship.
+
+### 6.3 Visibility
+
+- Quotes are **private by default**. A private quote never leaves the local machine.
+- A user can mark individual quotes (or set a default) as **shared**. Only shared quotes are eligible to be served to peers.
+
+### 6.4 Sharing Handshake
+
+Sharing is mutual and consent-based:
+
+1. **A** shares their peer ID with **B** (out of band — link, QR, message).
+2. **B** sends a follow request to **A** using that peer ID.
+3. **A** accepts (or rejects) the request. Acceptance is explicit.
+4. Once accepted, **B**'s instance may pull **A**'s *shared* quotes.
+
+Either side can revoke at any time; revocation stops future syncs and is the user's to make.
+
+### 6.5 Ingesting Peer Quotes
+
+- Following a peer effectively registers a built-in **quote ingestor** for that peer.
+- On each poll cycle, the runtime fetches new shared quotes from accepted peers.
+- An incoming quote is verified against the author's peer ID, then attached to the matching local `Item` (by `item_id`/`item_url`). If the user hasn't ingested that item, the runtime may create a stub `Item` from the quote's `item_url` so the quote still surfaces.
+- Peer quotes are visible to enhancers and the viewer just like own quotes, but are clearly attributed to their author.
+
+### 6.6 Privacy Guarantees
+
+- No central server. Quote exchange is peer-to-peer between instances that have accepted each other.
+- A peer can only ever receive quotes explicitly marked `shared` by an author who has accepted them.
+- Quotes are signed; recipients reject unsigned or mis-signed quotes.
+
+---
+
+## 7. Configuration
 
 All wiring lives in `skroli.config.toml`.
 
@@ -141,45 +203,58 @@ ttl_hours = 48
 
 [viewer]
   module = "./my_viewer/web.py"
+
+[quotes]
+  default_visibility = "private"   # "private" | "shared"
+  # accepted peers whose shared quotes are ingested
+  peers = [
+    "ed25519:ab12…",
+    "ed25519:cd34…",
+  ]
 ```
 
 ---
 
-## 7. Data Storage
+## 8. Data Storage
 
 - Local SQLite database managed entirely by the skroli runtime.
-- Stores all items (post-enhancement) for the duration of their TTL.
+- Stores all items (post-enhancement) and their quotes for the duration of their TTL.
+- Quotes — own and ingested — and the peer keyring (own keypair + accepted peers) are persisted locally. Own private quotes never leave this store.
 - Users can query it directly for advanced use cases, but the schema is considered internal.
 - Optional JSON export for backup or portability.
 
 ---
 
-## 8. Non-Goals
+## 9. Non-Goals
 
 - skroli ships **no built-in ingestors, enhancers, or viewers**.
-- No cloud sync, user accounts, or multi-user support.
+- No cloud sync and no central server. The only network reach is peer-to-peer quote exchange between mutually accepted peers (see [§6](#6-quotes--peer-sharing)).
+- No accounts; peer identity is a self-generated keypair, not a hosted login.
 - No opinion on how items are ranked, displayed, or filtered — that is the user's domain.
 
 ---
 
-## 9. Tech Stack (Recommended)
+## 10. Tech Stack (Recommended)
 
 | Layer     | Choice                             | Rationale                              |
 |-----------|------------------------------------|----------------------------------------|
 | Runtime   | Python 3.11+                       | Easy to write plugins in; rich stdlib  |
 | Scheduler | APScheduler                        | Embedded, no external daemon needed    |
 | Storage   | SQLite (via SQLModel)              | Zero-dependency local DB               |
+| Identity  | ed25519 keypair (PyNaCl/cryptography) | Sign quotes, derive peer IDs        |
 | Config    | TOML                               | Human-readable, widely supported       |
 
 ---
 
-## 10. Milestones
+## 11. Milestones
 
 | # | Milestone                        | Scope                                                        |
 |---|----------------------------------|--------------------------------------------------------------|
-| 1 | **Plugin interfaces**            | Define `Ingestor`, `Enhancer`, `Viewer`, `Item` contracts    |
+| 1 | **Plugin interfaces**            | Define `Ingestor`, `Enhancer`, `Viewer`, `Item`, `Quote` contracts |
 | 2 | **Runtime skeleton**             | Poll loop, dedup, SQLite storage, config loading             |
 | 3 | **Plugin loading**               | Dynamically load user modules from config paths              |
-| 4 | **CLI**                          | `skroli run`, `skroli status`, `skroli reset`                |
-| 5 | **Error isolation**              | Ingestor/enhancer errors don't crash the pipeline            |
-| 6 | **Dev experience**               | Hot reload for plugins, verbose logging mode, example plugins |
+| 4 | **Quotes (local)**               | Attach private quotes to items; peer keypair generation      |
+| 5 | **Peer sharing**                 | Follow request/accept handshake, signed quote sync, revocation |
+| 6 | **CLI**                          | `skroli run`, `skroli status`, `skroli peer add/accept/revoke` |
+| 7 | **Error isolation**              | Ingestor/enhancer/peer-sync errors don't crash the pipeline  |
+| 8 | **Dev experience**               | Hot reload for plugins, verbose logging mode, example plugins |
