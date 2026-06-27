@@ -15,18 +15,32 @@ The user writes (or installs) their own:
 
 skroli's job is to wire them together, run them on schedule, and pass data between them reliably.
 
-skroli is **local-first, not local-only**. One built-in capability is federated: users can attach **quotes** to items — short, personal annotations, like a Twitter quote-tweet. Quotes are private by default, but a user can share their peer ID and, by mutual consent, allow others to ingest their quotes into their own feeds. See [§6 Quotes & Peer Sharing](#6-quotes--peer-sharing).
+skroli is **local-first, but not local-only**. The pipeline (ingest → enhance → view) runs locally, but two pieces of user-generated data live on a shared server — the **skroli federation**:
+
+- **quotes** — short personal annotations on items, like a Twitter quote-tweet.
+- **saves** — items the user has saved for keeping.
+
+Storing these in the federation is what makes sharing possible: quotes and saves are private by default, but a user can share their ID and, by mutual consent, let others pull their shared quotes/saves into their own feeds. See [§6 Quotes, Saves & the Federation](#6-quotes-saves--the-federation).
 
 ---
 
 ## 2. Architecture
 
 ```
-[ ingestors ]  →→→  [ enhancers ]  →→→  [ viewer ]
-  user-defined        user-defined        user-defined
+                    ┌─────────────────────────────┐
+   local instance   │   [ingestors] → [enhancers] → [viewer]   │
+                    │              │                            │
+                    └──────────────┼────────────────────────────┘
+                                   │  quotes & saves
+                                   ▼
+                       ╔══════════════════════╗
+                       ║   skroli federation  ║   ← shared server
+                       ║  (quotes + saves)    ║
+                       ╚══════════════════════╝
 ```
 
-Each stage is a defined interface. skroli calls them in order, handles scheduling, deduplication, storage, and inter-stage data passing.
+- The **local instance** owns the pipeline: user-defined ingestors, enhancers, and viewer. skroli calls them in order, handles scheduling, deduplication, local item storage, and inter-stage data passing.
+- The **skroli federation** is a server that stores users' quotes and saves and serves them — to their owner always, and to consenting peers on request.
 
 ---
 
@@ -87,13 +101,14 @@ interface Item {
   author?: string
   published_at: Date
   meta: Record<string, unknown>  // arbitrary fields added by enhancers
-  quotes: Quote[]                // annotations on this item (own + ingested from peers)
+  quotes: Quote[]                // annotations on this item (own + peers')
+  saved: boolean                 // whether the user has saved this item
 }
 ```
 
 Enhancers should write their outputs into `meta` rather than inventing new top-level fields, unless the field is universally meaningful.
 
-The `quotes` array is managed by the runtime, not by enhancers. Enhancers may *read* quotes (e.g. to boost an item's score because a trusted peer quoted it) but should not mutate them.
+The `quotes` array and `saved` flag are managed by the runtime (backed by the federation), not by enhancers. Enhancers may *read* them (e.g. boost an item's score because a trusted peer quoted it) but should not mutate them.
 
 ---
 
@@ -107,9 +122,9 @@ On each cycle (configurable interval, default: 15 minutes):
 2. Merge all returned items into one list.
 3. Deduplicate by `id` against the local store; discard already-seen items.
 4. Discard items older than the configured TTL.
-5. Pull new shared quotes from accepted peers and attach them to matching items (see [§6.5](#65-ingesting-peer-quotes)).
+5. Sync with the federation: pull the user's own quotes/saves and any shared quotes/saves from accepted peers, then attach them to matching items (see [§6.5](#65-syncing-quotes--saves)).
 6. Pass surviving items through the enhancer chain sequentially.
-7. Persist the final enhanced items and their quotes.
+7. Persist the final enhanced items locally.
 8. Call the viewer's `render()` with all current items (not just new ones).
 
 ### 5.2 Deduplication
@@ -118,63 +133,80 @@ Items are deduplicated by `id`. Once an item is stored, it will not be passed to
 
 ### 5.3 Storage
 
-skroli maintains a local SQLite store of all items. This is an implementation detail of the runtime — ingestors, enhancers, and viewers do not interact with it directly.
+skroli maintains a local SQLite store of all items. This is an implementation detail of the runtime — ingestors, enhancers, and viewers do not interact with it directly. Quotes and saves are **not** stored here; they live in the federation (see [§6](#6-quotes-saves--the-federation)) and are synced into items at runtime.
 
 ---
 
-## 6. Quotes & Peer Sharing
+## 6. Quotes, Saves & the Federation
 
-A **quote** is a short personal annotation a user attaches to an item — a reaction, a note, a counterpoint. This is the one place skroli reaches beyond the local machine: quotes can be selectively shared with consenting peers and ingested into their feeds.
+While the pipeline runs locally, two kinds of user-generated data are stored on the **skroli federation** — a shared server:
 
-### 6.1 Quote Schema
+- A **quote** is a short personal annotation on an item — a reaction, a note, a counterpoint (like a Twitter quote-tweet).
+- A **save** is an item the user has marked to keep.
+
+Putting these in the federation gives them a durable home independent of any single item's TTL, lets the user see them across devices, and — crucially — makes consent-based sharing possible.
+
+### 6.1 Schemas
 
 ```ts
 interface Quote {
   id: string           // unique quote identifier
   item_id: string      // the Item this quote is attached to
   item_url: string     // canonical link, so the quote is meaningful even if
-                       //   the recipient hasn't ingested the original item
-  author_id: string    // peer ID of the quote's author
+                       //   a recipient hasn't ingested the original item
+  author_id: string    // skroli ID of the quote's author
   text: string         // the annotation itself
+  created_at: Date
+  visibility: "private" | "shared"   // default: "private"
+}
+
+interface Save {
+  id: string
+  item_id: string
+  item_url: string
+  item_title: string   // snapshot, so a save is readable on its own
+  author_id: string    // skroli ID of the user who saved it
   created_at: Date
   visibility: "private" | "shared"   // default: "private"
 }
 ```
 
-### 6.2 Peer Identity
+### 6.2 Identity
 
-- Each skroli instance has a **peer ID**: a stable, self-generated public identifier (e.g. a public-key fingerprint).
-- The peer ID is what a user shares to let others request their quotes.
-- The corresponding private key signs outgoing quotes so recipients can verify authorship.
+- Each user has a **skroli ID**: a stable account on the federation, plus a keypair held by their local instance.
+- The skroli ID is what a user shares to let others request their quotes/saves.
+- The local instance signs writes to the federation so authorship can be verified and quotes/saves can't be forged.
 
 ### 6.3 Visibility
 
-- Quotes are **private by default**. A private quote never leaves the local machine.
-- A user can mark individual quotes (or set a default) as **shared**. Only shared quotes are eligible to be served to peers.
+- Quotes and saves are **private by default**. Private records are stored on the federation but served only to their owner.
+- A user can mark individual records (or set a default) as **shared**. Only shared records are eligible to be served to accepted peers.
 
 ### 6.4 Sharing Handshake
 
-Sharing is mutual and consent-based:
+Sharing is mutual and consent-based, mediated by the federation:
 
-1. **A** shares their peer ID with **B** (out of band — link, QR, message).
-2. **B** sends a follow request to **A** using that peer ID.
+1. **A** shares their skroli ID with **B** (out of band — link, QR, message).
+2. **B** sends a follow request to **A** through the federation.
 3. **A** accepts (or rejects) the request. Acceptance is explicit.
-4. Once accepted, **B**'s instance may pull **A**'s *shared* quotes.
+4. Once accepted, the federation serves **A**'s *shared* quotes and saves to **B** on sync.
 
-Either side can revoke at any time; revocation stops future syncs and is the user's to make.
+Either side can revoke at any time; revocation stops future sharing and is the user's to make.
 
-### 6.5 Ingesting Peer Quotes
+### 6.5 Syncing Quotes & Saves
 
-- Following a peer effectively registers a built-in **quote ingestor** for that peer.
-- On each poll cycle, the runtime fetches new shared quotes from accepted peers.
-- An incoming quote is verified against the author's peer ID, then attached to the matching local `Item` (by `item_id`/`item_url`). If the user hasn't ingested that item, the runtime may create a stub `Item` from the quote's `item_url` so the quote still surfaces.
-- Peer quotes are visible to enhancers and the viewer just like own quotes, but are clearly attributed to their author.
+On each poll cycle the local runtime syncs with the federation:
 
-### 6.6 Privacy Guarantees
+- Pulls the user's **own** quotes and saves and applies them to matching items (sets `saved`, fills `quotes[]`).
+- Pulls **shared** quotes and saves from accepted peers and attaches them to matching items by `item_id`/`item_url`. If the user hasn't ingested an item, the runtime may create a stub `Item` from the stored `item_url`/`item_title` so the record still surfaces.
+- Pushes the user's newly created quotes/saves up to the federation.
+- Peer records are shown to enhancers and the viewer just like the user's own, but are clearly attributed to their author.
 
-- No central server. Quote exchange is peer-to-peer between instances that have accepted each other.
-- A peer can only ever receive quotes explicitly marked `shared` by an author who has accepted them.
-- Quotes are signed; recipients reject unsigned or mis-signed quotes.
+### 6.6 Privacy & Trust
+
+- A peer can only ever receive records explicitly marked `shared` by an author who has accepted them.
+- The federation enforces visibility and follow relationships server-side; clients also verify signatures and reject forged or mis-signed records.
+- Private quotes and saves are never served to anyone but their owner.
 
 ---
 
@@ -204,12 +236,14 @@ ttl_hours = 48
 [viewer]
   module = "./my_viewer/web.py"
 
-[quotes]
-  default_visibility = "private"   # "private" | "shared"
-  # accepted peers whose shared quotes are ingested
+[federation]
+  server = "https://federation.skroli.net"   # or a self-hosted instance
+  id = "@me"                                  # this user's skroli ID
+  default_visibility = "private"              # "private" | "shared"
+  # accepted peers whose shared quotes/saves are synced into the feed
   peers = [
-    "ed25519:ab12…",
-    "ed25519:cd34…",
+    "@alice",
+    "@bob",
   ]
 ```
 
@@ -217,32 +251,40 @@ ttl_hours = 48
 
 ## 8. Data Storage
 
-- Local SQLite database managed entirely by the skroli runtime.
-- Stores all items (post-enhancement) and their quotes for the duration of their TTL.
-- Quotes — own and ingested — and the peer keyring (own keypair + accepted peers) are persisted locally. Own private quotes never leave this store.
+Storage is split across two tiers:
+
+**Local (per instance):**
+- SQLite database managed entirely by the skroli runtime.
+- Stores all items (post-enhancement) for the duration of their TTL, plus the user's keypair and a cache of synced quotes/saves.
 - Users can query it directly for advanced use cases, but the schema is considered internal.
 - Optional JSON export for backup or portability.
+
+**Federation (shared server):**
+- Stores all quotes and saves, the user account/skroli ID, follow relationships, and visibility flags.
+- Enforces visibility and follow rules server-side; serves records only to their owner or to accepted peers.
+- Can be the public skroli federation or a self-hosted instance pointed at via config.
 
 ---
 
 ## 9. Non-Goals
 
 - skroli ships **no built-in ingestors, enhancers, or viewers**.
-- No cloud sync and no central server. The only network reach is peer-to-peer quote exchange between mutually accepted peers (see [§6](#6-quotes--peer-sharing)).
-- No accounts; peer identity is a self-generated keypair, not a hosted login.
+- The pipeline and item storage stay local; only quotes and saves leave the machine, to the federation (see [§6](#6-quotes-saves--the-federation)).
 - No opinion on how items are ranked, displayed, or filtered — that is the user's domain.
+- The federation stores quotes and saves only — never the user's raw feed, ingestor credentials, or pipeline data.
 
 ---
 
 ## 10. Tech Stack (Recommended)
 
-| Layer     | Choice                             | Rationale                              |
-|-----------|------------------------------------|----------------------------------------|
-| Runtime   | Python 3.11+                       | Easy to write plugins in; rich stdlib  |
-| Scheduler | APScheduler                        | Embedded, no external daemon needed    |
-| Storage   | SQLite (via SQLModel)              | Zero-dependency local DB               |
-| Identity  | ed25519 keypair (PyNaCl/cryptography) | Sign quotes, derive peer IDs        |
-| Config    | TOML                               | Human-readable, widely supported       |
+| Layer            | Choice                             | Rationale                              |
+|------------------|------------------------------------|----------------------------------------|
+| Local runtime    | Python 3.11+                       | Easy to write plugins in; rich stdlib  |
+| Scheduler        | APScheduler                        | Embedded, no external daemon needed    |
+| Local storage    | SQLite (via SQLModel)              | Zero-dependency local DB               |
+| Identity         | ed25519 keypair (PyNaCl/cryptography) | Sign quotes/saves, prove authorship |
+| Config           | TOML                               | Human-readable, widely supported       |
+| Federation server| FastAPI + Postgres                 | Stores quotes/saves, follows, visibility; REST sync API |
 
 ---
 
@@ -250,11 +292,12 @@ ttl_hours = 48
 
 | # | Milestone                        | Scope                                                        |
 |---|----------------------------------|--------------------------------------------------------------|
-| 1 | **Plugin interfaces**            | Define `Ingestor`, `Enhancer`, `Viewer`, `Item`, `Quote` contracts |
+| 1 | **Plugin interfaces**            | Define `Ingestor`, `Enhancer`, `Viewer`, `Item`, `Quote`, `Save` contracts |
 | 2 | **Runtime skeleton**             | Poll loop, dedup, SQLite storage, config loading             |
 | 3 | **Plugin loading**               | Dynamically load user modules from config paths              |
-| 4 | **Quotes (local)**               | Attach private quotes to items; peer keypair generation      |
-| 5 | **Peer sharing**                 | Follow request/accept handshake, signed quote sync, revocation |
-| 6 | **CLI**                          | `skroli run`, `skroli status`, `skroli peer add/accept/revoke` |
-| 7 | **Error isolation**              | Ingestor/enhancer/peer-sync errors don't crash the pipeline  |
-| 8 | **Dev experience**               | Hot reload for plugins, verbose logging mode, example plugins |
+| 4 | **Federation server (MVP)**      | Accounts/IDs, store private quotes & saves, signed REST sync API |
+| 5 | **Quotes & saves (local)**       | Create quotes and save items; sync own records with federation |
+| 6 | **Sharing**                      | Follow request/accept handshake, shared-record sync, revocation |
+| 7 | **CLI**                          | `skroli run`, `skroli status`, `skroli peer add/accept/revoke` |
+| 8 | **Error isolation**             | Ingestor/enhancer/sync errors don't crash the pipeline       |
+| 9 | **Dev experience**               | Hot reload for plugins, verbose logging mode, example plugins, self-host docs |
