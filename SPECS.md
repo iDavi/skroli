@@ -86,24 +86,94 @@ are three kinds.
 
 ### 3.3 Viewers
 
-- Receive the final, enhanced feed and present it.
-- Run once per cycle, after enhancers.
-- Examples: a local web UI, a terminal feed, a daily email digest, a static
-  page, a notification.
+The viewer is the **layout and design** of the feed, and it is meant to be
+*extremely* customizable — a user should be able to make their feed look and
+behave exactly like Twitter, Reddit, a magazine, a terminal, an email digest, or
+anything else. To allow that without giving custom code free rein, viewers come
+in two tiers:
 
-### 3.4 Addon Capabilities
+**Tier 1 — Themes (safe by default).**
+- A theme is **CSS-only** styling layered on a built-in viewer.
+- No custom code runs; themes are safe to install and enable without warnings.
+- Covers most "make it look like X" needs (colors, spacing, typography, card
+  layout).
+
+**Tier 2 — Full viewers (custom, sandboxed).**
+- A full viewer ships its own HTML/CSS/JS and controls everything: layout,
+  interactions (infinite scroll, hover cards, threaded comments), the lot.
+- Because this is custom code, it runs **isolated** (see [§3.6](#36-custom-ui-the-sandbox--bridge)).
+- Installing a full viewer requires an explicit permission prompt that makes
+  clear it runs third-party code.
+
+A viewer receives the final, enhanced feed once per cycle and presents it. It can
+also drive user actions — save, quote, open a link, load more — but only through
+the host bridge described in §3.6.
+
+### 3.4 Addon Configuration Screens
+
+Every addon has a **config screen** where the user supplies its settings. Like
+viewers, config screens are customizable, with the same two tiers:
+
+**Tier 1 — Declarative form (safe by default).**
+- The addon declares a **settings schema** (fields, types, labels, defaults,
+  validation, required/optional, secret/not).
+- skroli renders a standard form from it. No custom code runs.
+- Handles the common case: API keys, toggles, lists (subreddits, feed URLs),
+  dropdowns, numbers.
+
+**Tier 2 — Custom config UI (sandboxed).**
+- For richer needs — a live preview, "test connection", an OAuth login flow,
+  picking from a list fetched live from the source — an addon may ship a custom
+  config screen.
+- It runs in the same sandbox as full viewers (§3.6) and reads/writes its
+  settings only through the bridge.
+
+skroli surfaces required settings at install time and refuses to run an addon
+that is missing required settings. Secret settings (keys, tokens) are stored
+locally and never sent to the federation or the store.
+
+### 3.5 Addon Capabilities
 
 Every addon declares:
 
 - a **type** (ingestor / enhancer / viewer),
 - a **name** and **version**,
-- the **settings** it accepts (with types, defaults, and whether each is
-  required or secret),
-- the **permissions** it needs (network access, federation access, filesystem
-  access).
+- the **settings** it accepts (the settings schema, with types, defaults, and
+  whether each is required or secret),
+- whether it ships a **custom UI** (full viewer and/or custom config screen),
+- the **permissions** it needs — e.g. source network access (ingestors),
+  federation access, filesystem access, and UI capabilities like
+  `remote-images` or `open-external-links`.
 
-skroli surfaces required settings to the user at install time and refuses to run
-an addon that is missing required settings.
+skroli enforces declared permissions at runtime; an addon cannot exceed them.
+
+### 3.6 Custom UI: the Sandbox & Bridge
+
+Both full viewers (§3.3) and custom config screens (§3.4) run custom code. skroli
+runs that code **isolated**, and lets it interact with the user's data and the
+app **only** through a defined bridge. These are hard requirements:
+
+- **Isolation.** Custom UI runs in a sandbox (e.g. a sandboxed, cross-origin
+  frame) where it cannot access the host application, the user's secrets,
+  federation credentials, the filesystem, or other addons' data.
+- **No ambient network.** Network egress is **denied by default**, so custom UI
+  cannot exfiltrate the feed, quotes, or saves. Loading remote images is the
+  only network capability, and only when the `remote-images` permission is
+  granted.
+- **Data in, only via the bridge.** Viewers receive the feed; config screens
+  receive their current settings. They get nothing else.
+- **Actions out, only via the bridge, always mediated.** Custom UI can request
+  actions — save/unsave, create a quote, open an external link, load more items,
+  read/write its own settings, run a host-mediated flow like OAuth or "test
+  connection" — and the host validates and performs each one against the addon's
+  permissions. The UI never performs privileged actions itself.
+- **Anti-spoofing.** skroli draws its own chrome around custom UI (a persistent
+  "third-party: «addon name»" badge) so a malicious viewer can't convincingly
+  impersonate skroli or a login screen.
+
+This is a deliberate, bounded security tradeoff: addons get near-total visual and
+interactive freedom, while isolation + a mediated bridge keep them away from
+anything sensitive.
 
 ---
 
@@ -291,7 +361,9 @@ Logical entities skroli manages. Field lists are the essentials, not exhaustive.
   `meta`, `saved`, plus references to its quotes. Lives for the retention window
   (or forever, if saved).
 - **InstalledAddon** — `id`, `type`, `name`, `version`, `enabled`, `order`
-  (for enhancers), `settings`, `permissions`.
+  (for enhancers), `settings`, `permissions`, `has_custom_ui`.
+- **Theme** — `id`, `name`, `target_viewer`, `css`, `enabled`. A CSS-only skin
+  layered on a built-in viewer.
 - **Secret** — addon settings marked sensitive; stored locally only.
 - **UserKey / credentials** — the local identity used to authenticate to the
   federation.
@@ -309,9 +381,9 @@ Logical entities skroli manages. Field lists are the essentials, not exhaustive.
 ### Store
 
 - **Addon** — `id`, `type`, `name`, `description`, `author`, `category`,
-  `permissions`, `settings_schema`.
-- **AddonVersion** — `addon_id`, `version`, `manifest`, `published_at`,
-  `signature`.
+  `permissions`, `settings_schema`, `has_custom_ui`.
+- **AddonVersion** — `addon_id`, `version`, `manifest`, `assets` (CSS/JS bundle
+  for themes and custom UI), `published_at`, `signature`.
 - **Review** — `addon_id`, `author_id`, `rating`, `text`, `created_at`.
 
 ---
@@ -331,8 +403,10 @@ Logical entities skroli manages. Field lists are the essentials, not exhaustive.
 | #  | Milestone                | Delivers                                                        |
 |----|--------------------------|----------------------------------------------------------------|
 | 1  | **Pipeline core**        | Ingest → enhance → view loop with the `Item` model.            |
-| 2  | **Addon model**          | Install, enable, order, and configure addons with settings.    |
+| 2  | **Addon model**          | Install, enable, order, and configure addons via declarative settings forms. |
 | 3  | **First addons**         | A reference ingestor, enhancer, and viewer to prove the model. |
+| 3b | **Themes**               | CSS-only skins on built-in viewers (safe, no code).            |
+| 3c | **Custom UI sandbox**    | Isolated full viewers & custom config screens with the host bridge. |
 | 4  | **Saves**                | Save/unsave items; saved items persist past retention.         |
 | 5  | **Quotes**               | Create and view quotes on items.                               |
 | 6  | **Federation accounts**  | skroli IDs; quotes & saves stored and synced per user.         |
