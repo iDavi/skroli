@@ -62,6 +62,13 @@ class Storage:
                 ),
             )
             new += cur.rowcount
+            # Backfill an image onto a row that was stored before we extracted one,
+            # without disturbing first_seen / saved (so re-fetches "heal" old items).
+            if cur.rowcount == 0 and it.image:
+                self._db.execute(
+                    "UPDATE items SET image = ? WHERE id = ? AND image = ''",
+                    (it.image, it.id),
+                )
         self._db.commit()
         return new
 
