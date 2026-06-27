@@ -5,12 +5,21 @@ A thin SQLite layer. The schema is internal; addons never touch it directly.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import timedelta
 from pathlib import Path
 
 from .models import Item, utcnow
+
+
+def _load_meta(raw: str) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}
 
 
 class Storage:
@@ -30,16 +39,19 @@ class Storage:
                 body         TEXT NOT NULL DEFAULT '',
                 author       TEXT NOT NULL DEFAULT '',
                 image        TEXT NOT NULL DEFAULT '',
+                meta         TEXT NOT NULL DEFAULT '{}',
                 published_at REAL NOT NULL,
                 first_seen   REAL NOT NULL,
                 saved        INTEGER NOT NULL DEFAULT 0
             )
             """
         )
-        # Migrate older databases that predate the image column.
+        # Migrate older databases that predate added columns.
         cols = {r["name"] for r in self._db.execute("PRAGMA table_info(items)")}
         if "image" not in cols:
             self._db.execute("ALTER TABLE items ADD COLUMN image TEXT NOT NULL DEFAULT ''")
+        if "meta" not in cols:
+            self._db.execute("ALTER TABLE items ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
         self._db.commit()
 
     def add_new(self, items: list[Item]) -> int:
@@ -48,11 +60,12 @@ class Storage:
         new = 0
         with self._lock:
             for it in items:
+                meta_json = json.dumps(it.meta or {})
                 cur = self._db.execute(
                     """
                     INSERT OR IGNORE INTO items
-                        (id, source, url, title, body, author, image, published_at, first_seen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (id, source, url, title, body, author, image, meta, published_at, first_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         it.id,
@@ -62,18 +75,24 @@ class Storage:
                         it.body,
                         it.author,
                         it.image,
+                        meta_json,
                         it.published_at.timestamp(),
                         now,
                     ),
                 )
                 new += cur.rowcount
-                # Backfill an image onto a row stored before we extracted one,
-                # without disturbing first_seen / saved (re-fetches "heal" old items).
-                if cur.rowcount == 0 and it.image:
+                # For items we've already seen, refresh the volatile bits without
+                # touching first_seen / saved: meta (votes/points change over time)
+                # and an image if one is now available but wasn't before.
+                if cur.rowcount == 0:
                     self._db.execute(
-                        "UPDATE items SET image = ? WHERE id = ? AND image = ''",
-                        (it.image, it.id),
+                        "UPDATE items SET meta = ? WHERE id = ?", (meta_json, it.id)
                     )
+                    if it.image:
+                        self._db.execute(
+                            "UPDATE items SET image = ? WHERE id = ? AND image = ''",
+                            (it.image, it.id),
+                        )
             self._db.commit()
         return new
 
@@ -96,6 +115,7 @@ class Storage:
                 body=r["body"],
                 author=r["author"],
                 image=r["image"],
+                meta=_load_meta(r["meta"]),
                 published_at=datetime.fromtimestamp(r["published_at"], tz=timezone.utc),
                 saved=bool(r["saved"]),
             )

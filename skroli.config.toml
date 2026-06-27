@@ -1,6 +1,7 @@
 # skroli configuration (0.0.1)
 # Everything here is optional — running skroli with no config file uses sensible
-# defaults. Copy this file, edit it, and run `skroli -c skroli.config.toml run`.
+# defaults. You can also edit all of this live in the app (Ingestors / Enhancers
+# tabs); saving there rewrites this file.
 
 [runtime]
 poll_interval_minutes = 15   # how often to re-fetch in the background
@@ -11,15 +12,25 @@ open_window = false          # true = native window (needs `pip install skroli[d
 # The built-in RSS ingestor. It can't be removed; configure its sources here.
 [ingestors.rss]
 feeds = [
-  "https://news.ycombinator.com/rss",
   "https://www.theverge.com/rss/index.xml",
 ]
-# Subreddits are fetched as reddit.com/r/<name>/.rss — no Reddit account needed.
+# Subreddits are fetched from Reddit's JSON API (upvotes + comments + images).
 subreddits = ["programming", "selfhosted"]
+# Letterboxd usernames — their public film reviews show up in the feed.
+letterboxd = []
 
-# The built-in scoring enhancer: score = recency-decay × per-source weight.
+# Hacker News via the official API (real points + comment counts).
+[ingestors.hackernews]
+count = 30                   # front-page stories to fetch (0 disables HN)
+
+# The built-in scoring enhancer: recency decay × per-source weight.
 [enhancers.score]
 half_life_hours = 12.0
 # Optional: nudge specific sources up or down (matched on their feed title).
 # [enhancers.score.weights]
 # "Hacker News" = 1.2
+
+# The built-in engagement enhancer: blends votes/points into the score.
+[enhancers.engagement]
+weight = 0.4                 # 0 = ignore votes, 1 = rank almost purely by votes
+cap = 2000                   # votes/points that count as a "full" engagement score

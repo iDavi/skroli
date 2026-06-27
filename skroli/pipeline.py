@@ -35,6 +35,10 @@ def item_to_dict(it: Item) -> dict:
         "score": round(it.score, 4),
         "published_at": it.published_at.timestamp(),
         "is_reddit": it.source.startswith("r/"),
+        # Engagement signals (present for Reddit / Hacker News items).
+        "engagement": it.meta.get("engagement"),
+        "comments": it.meta.get("comments"),
+        "comments_url": it.meta.get("comments_url"),
     }
 
 

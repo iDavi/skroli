@@ -1,15 +1,22 @@
 """Built-in RSS ingestor (SPECS §3.1).
 
-Reads any RSS 2.0 or Atom feed using only the Python standard library. Reddit is
-supported by adding a subreddit — skroli fetches ``reddit.com/r/<name>/.rss``,
-no account needed. This ingestor ships with skroli and cannot be removed; the
-user configures its feeds and subreddits.
+Reads any RSS 2.0 or Atom feed using only the Python standard library. Three
+source kinds share this ingestor:
+
+* **feeds** — any RSS/Atom URL.
+* **subreddits** — fetched from Reddit's JSON API (``/r/<name>/hot.json``) so we
+  capture upvotes, comment counts, and a preview image for the engagement
+  enhancer. No account needed.
+* **letterboxd** — a username's public review feed (``letterboxd.com/<user>/rss``).
+
+This ingestor ships with skroli and cannot be removed.
 """
 
 from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 import time
 import urllib.error
@@ -29,12 +36,43 @@ CONTENT = "{http://purl.org/rss/1.0/modules/content/}"
 _TAGS = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
 _IMG_SRC = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
-# Reddit rate-limits anonymous .rss hard; be polite between requests and retry.
+REDDIT_LIMIT = 25  # posts per subreddit
+# Reddit rate-limits anonymous requests hard; be polite between requests and retry.
 _REQUEST_GAP_SECONDS = 1.5
 _MAX_RETRIES = 3
-# Reddit rate-limits anonymous .rss hard; be polite between requests and retry.
-_REQUEST_GAP_SECONDS = 1.5
-_MAX_RETRIES = 3
+
+
+_LB_FOLLOWING = re.compile(r'href="/([^/"]+)/"\s+class="name"')
+_LB_MAX_PAGES = 12  # ~25 names/page → cap the import so it stays quick
+
+
+def letterboxd_following(username: str, max_pages: int = _LB_MAX_PAGES) -> list[str]:
+    """Scrape the public ``/<user>/following/`` pages for the accounts they
+    follow. Letterboxd has no API, so this reads the HTML; used by the UI's
+    "import following" button to bulk-add profiles."""
+    user = username.strip().lstrip("@").strip("/")
+    if not user:
+        return []
+    seen: list[str] = []
+    known: set[str] = set()
+    for page in range(1, max_pages + 1):
+        path = f"https://letterboxd.com/{user}/following/"
+        if page > 1:
+            path += f"page/{page}/"
+        req = urllib.request.Request(path, headers={"User-Agent": USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                html_text = resp.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 - stop on the first page that fails
+            break
+        names = [n for n in _LB_FOLLOWING.findall(html_text) if n != user]
+        fresh = [n for n in names if n not in known]
+        if not fresh:
+            break  # no new names → past the last page
+        for n in fresh:
+            known.add(n)
+            seen.append(n)
+    return seen
 
 
 def _stable_id(source: str, entry_id: str) -> str:
@@ -84,6 +122,18 @@ def _extract_image(el) -> str:
     return _img_from_html(raw_html)
 
 
+def _reddit_image(d: dict) -> str:
+    """Best preview image from a Reddit post's JSON, if any."""
+    preview = d.get("preview") or {}
+    images = preview.get("images") or []
+    if images:
+        src = (images[0].get("source") or {}).get("url")
+        if src:
+            return html.unescape(src)  # Reddit HTML-escapes the URL
+    thumb = d.get("thumbnail", "")
+    return thumb if thumb.startswith("http") else ""
+
+
 def _parse_date(value: str) -> datetime:
     if not value:
         return utcnow()
@@ -109,14 +159,20 @@ class RssIngestor:
     def __init__(self, config: RssConfig):
         self._config = config
 
-    def _sources(self) -> list[tuple[str, str, bool]]:
-        """Return (label, url, is_reddit) for every configured source."""
-        out: list[tuple[str, str, bool]] = []
+    def _sources(self) -> list[tuple[str, str, str]]:
+        """Return (kind, label, url) for every configured source."""
+        out: list[tuple[str, str, str]] = []
         for url in self._config.feeds:
-            out.append(("", url, False))
+            out.append(("rss", "", url))
+        for user in self._config.letterboxd:
+            u = user.strip().lstrip("@").strip("/")
+            out.append(("rss", f"Letterboxd · {u}", f"https://letterboxd.com/{u}/rss/"))
         for sub in self._config.subreddits:
             name = sub.removeprefix("r/").strip("/")
-            out.append((f"r/{name}", f"https://www.reddit.com/r/{name}/.rss", True))
+            out.append((
+                "reddit", f"r/{name}",
+                f"https://www.reddit.com/r/{name}/hot.json?limit={REDDIT_LIMIT}",
+            ))
         return out
 
     def _fetch_url(self, url: str) -> bytes:
@@ -139,7 +195,7 @@ class RssIngestor:
                 time.sleep(wait)
         raise RuntimeError("unreachable")
 
-    def _parse(self, raw: bytes, label: str, url: str, is_reddit: bool) -> list[Item]:
+    def _parse(self, raw: bytes, label: str, url: str) -> list[Item]:
         root = ET.fromstring(raw)
         items: list[Item] = []
 
@@ -155,7 +211,7 @@ class RssIngestor:
                 items.append(self._mk(
                     feed_title, entry_id, link, _text(it.find("title")),
                     _text(it.find("description")), _text(it.find("pubDate")),
-                    _text(it.find("author")), is_reddit, _extract_image(it),
+                    _text(it.find("author")), _extract_image(it),
                 ))
             return items
 
@@ -172,11 +228,11 @@ class RssIngestor:
             author = _text(e.find(f"{ATOM}author/{ATOM}name"))
             items.append(self._mk(
                 feed_title, entry_id, link, _text(e.find(f"{ATOM}title")),
-                body, date, author, is_reddit, _extract_image(e),
+                body, date, author, _extract_image(e),
             ))
         return items
 
-    def _mk(self, source, entry_id, link, title, body, date, author, is_reddit, image) -> Item:
+    def _mk(self, source, entry_id, link, title, body, date, author, image) -> Item:
         return Item(
             id=_stable_id(source, entry_id),
             source=source,
@@ -186,18 +242,54 @@ class RssIngestor:
             author=_clean(author),
             image=image,
             published_at=_parse_date(date),
-            meta={"is_reddit": is_reddit},
+            meta={},
         )
+
+    def _parse_reddit(self, raw: bytes, label: str) -> list[Item]:
+        """Parse Reddit's JSON listing, capturing score/comments/image."""
+        data = json.loads(raw)
+        items: list[Item] = []
+        for child in data.get("data", {}).get("children", []):
+            d = child.get("data", {})
+            post_id = d.get("id")
+            if not post_id:
+                continue
+            permalink = "https://www.reddit.com" + d.get("permalink", "")
+            external = d.get("url_overridden_by_dest") or d.get("url") or permalink
+            created = d.get("created_utc")
+            published = (
+                datetime.fromtimestamp(float(created), tz=timezone.utc)
+                if created else utcnow()
+            )
+            items.append(Item(
+                id=_stable_id(label, post_id),
+                source=label,
+                url=external,
+                title=_clean(d.get("title", "")) or "(untitled)",
+                body=_clean(d.get("selftext", "")),
+                author=d.get("author", ""),
+                image=_reddit_image(d),
+                published_at=published,
+                meta={
+                    "engagement": int(d.get("score") or 0),
+                    "comments": int(d.get("num_comments") or 0),
+                    "comments_url": permalink,
+                },
+            ))
+        return items
 
     def fetch(self) -> list[Item]:
         items: list[Item] = []
         sources = self._sources()
-        for i, (label, url, is_reddit) in enumerate(sources):
+        for i, (kind, label, url) in enumerate(sources):
             if i:  # space requests out so feeds (esp. Reddit) don't 429 us
                 time.sleep(_REQUEST_GAP_SECONDS)
             try:
                 raw = self._fetch_url(url)
-                items.extend(self._parse(raw, label, url, is_reddit))
+                if kind == "reddit":
+                    items.extend(self._parse_reddit(raw, label))
+                else:
+                    items.extend(self._parse(raw, label, url))
             except Exception as exc:  # noqa: BLE001 - one bad feed shouldn't stop the rest
                 print(f"  ! feed failed ({label or url}): {exc}")
         return items

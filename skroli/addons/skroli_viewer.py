@@ -15,7 +15,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
-from ..config import RssConfig, ScoreConfig
+from ..config import Config
 from .. import stream
 
 FONT = '"Libertinus Math","Libertinus Serif",Georgia,"Times New Roman",serif'
@@ -167,17 +167,22 @@ function avatar(it){
 }
 function postHTML(it){
   const a = avatar(it);
-  const pct = Math.round((it.score||0)*100);
+  const pct = Math.min(Math.round((it.score||0)*100), 100);
   const media = it.image ? '<div class="media"><img src="'+esc(it.image)+'" alt="" loading="lazy" '+
     'onerror="this.closest(\\'.media\\').remove()"></div>' : '';
-  const badge = it.is_reddit ? '<span class="badge">reddit feed</span>' : '';
+  let eng = '';
+  if(it.engagement != null){
+    eng += '<span class="dot">·</span><span>▲ '+it.engagement+'</span>';
+  }
+  const ctxt = (it.comments != null) ? 'comments ('+it.comments+')' : 'comments';
+  const comments = it.comments_url
+    ? '<a class="act" href="'+esc(it.comments_url)+'" target="_blank" rel="noopener">'+ctxt+'</a>' : '';
   return '<article class="post"><div class="src '+a.cls+'">'+esc(a.badge)+'</div><div class="body">'+
     '<div class="meta"><span class="name">'+esc(it.source)+'</span>'+
-    '<span class="dot">·</span><span>via RSS</span>'+
-    '<span class="dot">·</span><span>'+relTime(it.published_at)+'</span>'+badge+'</div>'+
+    '<span class="dot">·</span><span>'+relTime(it.published_at)+'</span>'+eng+'</div>'+
     '<div class="title">'+esc(it.title)+'</div>'+
     '<div class="excerpt">'+esc(it.excerpt)+'</div>'+ media +
-    '<div class="actions"><a class="act" href="'+esc(it.url)+'" target="_blank" rel="noopener">↗ open</a>'+
+    '<div class="actions"><a class="act" href="'+esc(it.url)+'" target="_blank" rel="noopener">↗ open</a>'+ comments +
     '<span class="score">score <b>'+(it.score||0).toFixed(2)+'</b>'+
     '<span class="meter"><i style="width:'+pct+'%"></i></span></span></div></div></article>';
 }
@@ -230,6 +235,24 @@ function addWeight(){ _append('weights',
   '<div class="erow"><input class="wname" placeholder="Source name">'+
   '<input class="wval" type="number" step="0.1" placeholder="1.0">'+
   '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
+function addLb(value){ _append('letterboxd',
+  '<div class="erow"><span class="pre">@</span><input value="'+(value?esc(value):'')+'" placeholder="username">'+
+  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
+async function importFollowing(btn){
+  const u = document.getElementById('lb-import').value.trim().replace(/^@/,'');
+  const msg = document.getElementById('lb-import-msg');
+  if(!u){ if(msg) msg.textContent='enter a username first'; return; }
+  btn.disabled = true; if(msg) msg.textContent = 'importing…';
+  const res = await fetch('/api/letterboxd-following', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:u})});
+  const data = await res.json();
+  const have = new Set(_vals('#letterboxd input').map(s=>s.toLowerCase()));
+  let added = 0;
+  (data.users||[]).forEach(name=>{ if(!have.has(name.toLowerCase())){ addLb(name); have.add(name.toLowerCase()); added++; } });
+  btn.disabled = false;
+  if(msg) msg.textContent = added ? ('added '+added+' — review, then Save & refresh') : 'no new profiles found';
+  document.getElementById('lb-import').value = '';
+}
 function _vals(sel){ return [...document.querySelectorAll(sel)].map(i=>i.value.trim()).filter(Boolean); }
 async function _save(url, body, msgId, btn){
   btn.disabled = true; const msg = document.getElementById(msgId);
@@ -238,7 +261,12 @@ async function _save(url, body, msgId, btn){
   location.reload();
 }
 function saveIngestors(btn){
-  _save('/api/ingestors', {feeds:_vals('#feeds input'), subreddits:_vals('#subs input')}, 'ing-msg', btn);
+  _save('/api/ingestors', {feeds:_vals('#feeds input'), subreddits:_vals('#subs input'),
+    letterboxd:_vals('#letterboxd input')}, 'ing-msg', btn);
+}
+function saveHackernews(btn){
+  const c = parseInt(document.getElementById('hncount').value);
+  _save('/api/hackernews', {count:(isNaN(c)?0:c)}, 'hn-msg', btn);
 }
 function saveEnhancers(btn){
   const weights = {};
@@ -249,6 +277,11 @@ function saveEnhancers(btn){
   });
   const hl = parseFloat(document.getElementById('halflife').value);
   _save('/api/enhancers', {half_life_hours:(isNaN(hl)?12:hl), weights}, 'enh-msg', btn);
+}
+function saveEngagement(btn){
+  const w = parseFloat(document.getElementById('engweight').value);
+  const c = parseInt(document.getElementById('engcap').value);
+  _save('/api/engagement', {weight:(isNaN(w)?0:w), cap:(isNaN(c)?2000:c)}, 'eng2-msg', btn);
 }
 """
 
@@ -270,16 +303,24 @@ def _weight_row(name: str = "", value: str = "") -> str:
             f'<button class="x" type="button" onclick="rm(this)">×</button></div>')
 
 
-def _ingestors_page(rss: RssConfig) -> str:
+def _lb_row(name: str = "") -> str:
+    return (f'<div class="erow"><span class="pre">@</span>'
+            f'<input value="{html.escape(name)}" placeholder="username">'
+            f'<button class="x" type="button" onclick="rm(this)">×</button></div>')
+
+
+def _ingestors_page(config: Config) -> str:
+    rss = config.rss
     feeds = "".join(_feed_row(u) for u in rss.feeds)
     subs = "".join(_sub_row(s.removeprefix("r/").strip("/")) for s in rss.subreddits)
+    lb = "".join(_lb_row(u.lstrip("@")) for u in rss.letterboxd)
     return f"""
     <div class="head"><h1>Ingestors</h1></div>
     <div class="page">
       <div class="card">
         <div class="ctitle">RSS <span class="pill">built-in · always on</span></div>
-        <div class="desc">Reads any RSS or Atom feed, plus subreddits via their
-          public <code>.rss</code>. This ingestor ships with skroli and can't be removed.</div>
+        <div class="desc">Reads any RSS or Atom feed, subreddits (via Reddit's API,
+          with upvotes), and Letterboxd profiles (film reviews).</div>
         <div class="cols">
           <div class="col"><h4>Feeds</h4>
             <div id="feeds">{feeds}</div>
@@ -290,15 +331,48 @@ def _ingestors_page(rss: RssConfig) -> str:
             <button class="addbtn" type="button" onclick="addSub()">+ add subreddit</button>
           </div>
         </div>
+        <div class="cols" style="margin-top:16px">
+          <div class="col"><h4>Letterboxd profiles</h4>
+            <div id="letterboxd">{lb}</div>
+            <button class="addbtn" type="button" onclick="addLb()">+ add profile</button>
+            <div class="erow" style="border:0;margin-top:10px;padding:0">
+              <span class="pre">@</span>
+              <input id="lb-import" placeholder="username to import following from">
+              <button class="x" type="button" style="width:auto;padding:0 10px;white-space:nowrap"
+                onclick="importFollowing(this)">import</button>
+            </div>
+            <span class="savemsg" id="lb-import-msg"></span>
+          </div>
+          <div class="col"></div>
+        </div>
         <div class="saverow">
           <button class="savebtn" type="button" onclick="saveIngestors(this)">Save &amp; refresh</button>
           <span class="savemsg" id="ing-msg"></span>
         </div>
       </div>
+
+      <div class="card">
+        <div class="ctitle">Hacker News <span class="pill">built-in</span></div>
+        <div class="desc">Pulls the live front page from the official HN API, with
+          points and comment counts the engagement enhancer can rank by.</div>
+        <div class="cols">
+          <div class="col"><h4>Parameters</h4>
+            <div class="kv"><span>Stories to fetch (0 = off)</span>
+              <input id="hncount" type="number" step="5" min="0" value="{config.hn.count}"></div>
+          </div>
+          <div class="col"></div>
+        </div>
+        <div class="saverow">
+          <button class="savebtn" type="button" onclick="saveHackernews(this)">Save &amp; refresh</button>
+          <span class="savemsg" id="hn-msg"></span>
+        </div>
+      </div>
     </div>"""
 
 
-def _enhancers_page(score: ScoreConfig) -> str:
+def _enhancers_page(config: Config) -> str:
+    score = config.score
+    eng = config.engagement
     weights = "".join(_weight_row(k, f"{v:g}") for k, v in score.weights.items())
     return f"""
     <div class="head"><h1>Enhancers</h1></div>
@@ -306,8 +380,7 @@ def _enhancers_page(score: ScoreConfig) -> str:
       <div class="card">
         <div class="ctitle">Score <span class="pill">built-in</span></div>
         <div class="desc">Ranks the feed by recency. Each item scores
-          <code>0.5 ^ (age / half-life)</code> times its source weight, then the
-          feed is sorted high to low.</div>
+          <code>0.5 ^ (age / half-life)</code> times its source weight.</div>
         <div class="cols">
           <div class="col"><h4>Parameters</h4>
             <div class="kv"><span>Half-life (hours)</span>
@@ -324,10 +397,32 @@ def _enhancers_page(score: ScoreConfig) -> str:
           <span class="savemsg" id="enh-msg"></span>
         </div>
       </div>
+
+      <div class="card">
+        <div class="ctitle">Engagement <span class="pill">built-in</span></div>
+        <div class="desc">Blends community votes (Reddit upvotes, HN points) into the
+          score: <code>(1−weight)·recency + weight·votes</code>. Items without votes
+          (plain RSS, Letterboxd) keep their recency score.</div>
+        <div class="cols">
+          <div class="col"><h4>Weight (0–1)</h4>
+            <div class="kv"><span>How much votes matter</span>
+              <input id="engweight" type="number" step="0.05" min="0" max="1"
+                     value="{eng.weight:g}"></div>
+          </div>
+          <div class="col"><h4>Cap</h4>
+            <div class="kv"><span>Votes for a full score</span>
+              <input id="engcap" type="number" step="100" min="1" value="{eng.cap}"></div>
+          </div>
+        </div>
+        <div class="saverow">
+          <button class="savebtn" type="button" onclick="saveEngagement(this)">Save &amp; refresh</button>
+          <span class="savemsg" id="eng2-msg"></span>
+        </div>
+      </div>
     </div>"""
 
 
-def render_page(rss: RssConfig, score: ScoreConfig) -> str:
+def render_page(config: Config) -> str:
     nav_items = [
         ("⌂", "Home", "home", False),
         ("↓", "Ingestors", "ingestors", False),
@@ -358,8 +453,8 @@ def render_page(rss: RssConfig, score: ScoreConfig) -> str:
       <button class="iconbtn" id="refresh" title="Refresh feed" onclick="refresh(this)">↻</button></div>
     <div id="posts"><div class="empty">Loading your feed…</div></div>
   </section>
-  <section id="ingestors" class="view">{_ingestors_page(rss)}</section>
-  <section id="enhancers" class="view">{_enhancers_page(score)}</section>
+  <section id="ingestors" class="view">{_ingestors_page(config)}</section>
+  <section id="enhancers" class="view">{_enhancers_page(config)}</section>
 </main>
 <aside class="rail">
   <div class="panel"><h3>Sources</h3><div id="sources"><div class="srcrow">none yet</div></div></div>
@@ -378,20 +473,18 @@ class SkroliViewer:
         on_connect: Callable[[stream.Client], None] | None = None,
         on_refresh: Callable[[], None] | None = None,
         on_save: Callable[[], None] | None = None,
-        rss: RssConfig | None = None,
-        score: ScoreConfig | None = None,
+        config: Config | None = None,
     ):
         self.port = port
         self._broadcaster = broadcaster or stream.Broadcaster()
         self._on_connect = on_connect
         self._on_refresh = on_refresh
         self._on_save = on_save
-        self._rss = rss or RssConfig()
-        self._score = score or ScoreConfig()
+        self._config = config or Config()
         self._httpd: ThreadingHTTPServer | None = None
 
     def _page(self) -> bytes:
-        return render_page(self._rss, self._score).encode("utf-8")
+        return render_page(self._config).encode("utf-8")
 
     def serve(self, open_window: bool = False) -> None:
         viewer = self
@@ -466,17 +559,41 @@ class SkroliViewer:
                     self._ok()
                 elif self.path == "/api/ingestors":
                     data = self._read_json()
-                    viewer._rss.feeds = [str(x) for x in data.get("feeds", []) if str(x).strip()]
-                    viewer._rss.subreddits = [
+                    rss = viewer._config.rss
+                    rss.feeds = [str(x) for x in data.get("feeds", []) if str(x).strip()]
+                    rss.subreddits = [
                         str(x).strip() for x in data.get("subreddits", []) if str(x).strip()
                     ]
+                    rss.letterboxd = [
+                        str(x).strip().lstrip("@") for x in data.get("letterboxd", []) if str(x).strip()
+                    ]
+                    if viewer._on_save:
+                        viewer._on_save()
+                    self._ok()
+                elif self.path == "/api/letterboxd-following":
+                    from .rss_ingestor import letterboxd_following
+                    data = self._read_json()
+                    users = letterboxd_following(str(data.get("username", "")))
+                    body = json.dumps({"users": users}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif self.path == "/api/hackernews":
+                    data = self._read_json()
+                    try:
+                        viewer._config.hn.count = max(int(data.get("count", 30)), 0)
+                    except (ValueError, TypeError):
+                        pass
                     if viewer._on_save:
                         viewer._on_save()
                     self._ok()
                 elif self.path == "/api/enhancers":
                     data = self._read_json()
+                    score = viewer._config.score
                     try:
-                        viewer._score.half_life_hours = max(float(data.get("half_life_hours", 12)), 0.1)
+                        score.half_life_hours = max(float(data.get("half_life_hours", 12)), 0.1)
                     except (ValueError, TypeError):
                         pass
                     weights: dict[str, float] = {}
@@ -485,7 +602,21 @@ class SkroliViewer:
                             weights[str(k)] = float(v)
                         except (ValueError, TypeError):
                             continue
-                    viewer._score.weights = weights
+                    score.weights = weights
+                    if viewer._on_save:
+                        viewer._on_save()
+                    self._ok()
+                elif self.path == "/api/engagement":
+                    data = self._read_json()
+                    eng = viewer._config.engagement
+                    try:
+                        eng.weight = min(max(float(data.get("weight", 0.4)), 0.0), 1.0)
+                    except (ValueError, TypeError):
+                        pass
+                    try:
+                        eng.cap = max(int(data.get("cap", 2000)), 1)
+                    except (ValueError, TypeError):
+                        pass
                     if viewer._on_save:
                         viewer._on_save()
                     self._ok()

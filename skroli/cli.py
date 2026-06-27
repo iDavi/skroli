@@ -9,7 +9,9 @@ import time
 
 from . import __version__
 from .addons.rss_ingestor import RssIngestor
+from .addons.hn_ingestor import HackerNewsIngestor
 from .addons.score_enhancer import ScoreEnhancer
+from .addons.engagement_enhancer import EngagementEnhancer
 from .addons.skroli_viewer import SkroliViewer
 from .config import load_config, save_config
 from .pipeline import Engine
@@ -19,13 +21,14 @@ from .stream import Broadcaster
 
 def _build(config) -> tuple[Engine, SkroliViewer]:
     storage = Storage(config.data_dir / "skroli.db")
-    ingestors = [RssIngestor(config.rss)]
-    enhancers = [ScoreEnhancer(config.score)]
+    ingestors = [RssIngestor(config.rss), HackerNewsIngestor(config.hn)]
+    # Order matters: score (recency) first, then engagement folds votes in.
+    enhancers = [ScoreEnhancer(config.score), EngagementEnhancer(config.engagement)]
     broadcaster = Broadcaster()
     engine = Engine(config, storage, ingestors, enhancers, broadcaster)
 
     def on_save() -> None:
-        # The viewer mutates config.rss / config.score in place; persist + re-fetch.
+        # The viewer mutates the config dataclasses in place; persist + re-fetch.
         save_config(config)
         engine.refresh()
 
@@ -35,8 +38,7 @@ def _build(config) -> tuple[Engine, SkroliViewer]:
         on_connect=engine.send_cached,   # new viewer gets cached items instantly
         on_refresh=engine.refresh,       # refresh button streams fresh items
         on_save=on_save,
-        rss=config.rss,
-        score=config.score,
+        config=config,
     )
     return engine, viewer
 

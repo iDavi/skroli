@@ -25,6 +25,13 @@ class RuntimeConfig:
 class RssConfig:
     feeds: list[str] = field(default_factory=list)
     subreddits: list[str] = field(default_factory=list)
+    letterboxd: list[str] = field(default_factory=list)  # usernames → film reviews
+
+
+@dataclass
+class HnConfig:
+    # Hacker News via the official Algolia API (real points + comment counts).
+    count: int = 30  # how many front-page stories to pull (0 = disabled)
 
 
 @dataclass
@@ -35,10 +42,21 @@ class ScoreConfig:
 
 
 @dataclass
+class EngagementConfig:
+    # Blend community engagement (Reddit upvotes, HN points) into the score.
+    # final = (1 - weight)·recency + weight·engagement, engagement log-normalised
+    # against ``cap`` votes. weight 0 = ignore engagement entirely.
+    weight: float = 0.4
+    cap: int = 2000
+
+
+@dataclass
 class Config:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     rss: RssConfig = field(default_factory=RssConfig)
+    hn: HnConfig = field(default_factory=HnConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
+    engagement: EngagementConfig = field(default_factory=EngagementConfig)
     data_dir: Path = field(default_factory=lambda: Path.home() / ".skroli")
     source_path: Path | None = None
 
@@ -46,11 +64,9 @@ class Config:
 def _default_rss() -> RssConfig:
     """A sensible starter so a fresh install shows something immediately."""
     return RssConfig(
-        feeds=[
-            "https://news.ycombinator.com/rss",
-            "https://www.theverge.com/rss/index.xml",
-        ],
+        feeds=["https://www.theverge.com/rss/index.xml"],
         subreddits=["programming", "selfhosted"],
+        letterboxd=[],
     )
 
 
@@ -87,6 +103,10 @@ def save_config(config: Config) -> Path:
         "[ingestors.rss]",
         f"feeds = {_toml_array(config.rss.feeds)}",
         f"subreddits = {_toml_array(config.rss.subreddits)}",
+        f"letterboxd = {_toml_array(config.rss.letterboxd)}",
+        "",
+        "[ingestors.hackernews]",
+        f"count = {config.hn.count}",
         "",
         "[enhancers.score]",
         f"half_life_hours = {_toml_num(config.score.half_life_hours)}",
@@ -94,6 +114,12 @@ def save_config(config: Config) -> Path:
     if config.score.weights:
         lines += ["", "[enhancers.score.weights]"]
         lines += [f'"{_toml_escape(k)}" = {_toml_num(v)}' for k, v in config.score.weights.items()]
+    lines += [
+        "",
+        "[enhancers.engagement]",
+        f"weight = {_toml_num(config.engagement.weight)}",
+        f"cap = {config.engagement.cap}",
+    ]
     target.write_text("\n".join(lines) + "\n")
     config.source_path = target
     return target
@@ -119,16 +145,26 @@ def load_config(path: str | Path | None = None) -> Config:
             open_window=bool(rt.get("open_window", False)),
         )
 
-        rss = raw.get("ingestors", {}).get("rss", {})
+        ingestors = raw.get("ingestors", {})
+        rss = ingestors.get("rss", {})
         cfg.rss = RssConfig(
             feeds=list(rss.get("feeds", [])),
             subreddits=list(rss.get("subreddits", [])),
+            letterboxd=list(rss.get("letterboxd", [])),
         )
+        hn = ingestors.get("hackernews", {})
+        cfg.hn = HnConfig(count=int(hn.get("count", 30)))
 
-        sc = raw.get("enhancers", {}).get("score", {})
+        enhancers = raw.get("enhancers", {})
+        sc = enhancers.get("score", {})
         cfg.score = ScoreConfig(
             half_life_hours=float(sc.get("half_life_hours", 12.0)),
             weights={str(k): float(v) for k, v in sc.get("weights", {}).items()},
+        )
+        eng = enhancers.get("engagement", {})
+        cfg.engagement = EngagementConfig(
+            weight=float(eng.get("weight", 0.4)),
+            cap=int(eng.get("cap", 2000)),
         )
 
         if "data_dir" in raw:
