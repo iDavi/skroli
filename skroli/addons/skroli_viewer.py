@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import threading
 from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
-from ..config import RssConfig, ScoreConfig
+from ..config import Config, DEFAULT_CONFIG_NAME, RssConfig, ScoreConfig, write_config
 from ..models import Item, utcnow
 
 FONT = '"Libertinus Math","Libertinus Serif",Georgia,"Times New Roman",serif'
@@ -105,10 +106,22 @@ a{color:inherit;text-decoration:none}
 .kv b{color:var(--gold);font-weight:600}
 .hint{color:var(--stone-dim);font-size:13px;margin-top:16px;line-height:1.5}
 .hint code{background:var(--card);border:1px solid var(--olive-line);padding:1px 6px}
+.field{margin-top:14px}
+.field label{display:flex;justify-content:space-between;align-items:end;font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--stone);margin-bottom:8px}
+.field textarea,.field input{width:100%;background:rgba(0,0,0,.08);border:1px solid var(--olive-line);color:var(--parchment);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:10px;font-family:inherit}
+.field textarea{min-height:120px;resize:vertical}
+.field input{height:40px}
+.formrow{display:flex;gap:12px;align-items:center;margin-top:14px}
+.savebtn{border:1px solid var(--olive-line);background:var(--card);color:var(--parchment);font-family:inherit;font-size:15px;padding:9px 14px;cursor:pointer}
+.savebtn:hover{background:var(--card-hover)}
+.savebtn:disabled{opacity:.55;cursor:default}
+.status{color:var(--stone);font-size:13px}
+.status.ok{color:var(--gold)}
+.status.err{color:#f2c2ad}
 
 /* ---------- right rail (home only) ---------- */
-.rail{width:330px;flex:0 0 330px;padding:20px 22px;display:none}
-body.home .rail{display:block}
+.rail{width:330px;flex:0 0 330px;padding:20px 22px;visibility:hidden}
+body.home .rail{visibility:visible}
 .panel{border:1px solid var(--olive-line);padding:0 16px;margin-bottom:18px}
 .panel h3{font-size:13px;padding:14px 0 4px;color:var(--stone);font-weight:600;
  text-transform:uppercase;letter-spacing:.6px}
@@ -173,6 +186,14 @@ def _rows(values: list[str]) -> str:
     return "".join(f'<div class="row">{html.escape(v)}</div>' for v in values)
 
 
+def _textarea(name: str, values: list[str]) -> str:
+    return f'<textarea name="{name}" spellcheck="false">{html.escape(chr(10).join(values))}</textarea>'
+
+
+def _weights_text(weights: dict[str, float]) -> str:
+    return "\n".join(f"{source} = {weight:g}" for source, weight in weights.items())
+
+
 def _ingestors_page(rss: RssConfig) -> str:
     feeds = _rows(rss.feeds)
     subs = _rows([f"r/{s.removeprefix('r/').strip('/')}" for s in rss.subreddits])
@@ -182,13 +203,14 @@ def _ingestors_page(rss: RssConfig) -> str:
       <div class="card">
         <div class="ctitle">RSS <span class="pill">built-in · always on</span></div>
         <div class="desc">Reads any RSS or Atom feed, plus subreddits via their
-          public <code>.rss</code>. This ingestor ships with skroli and can't be removed.</div>
+          public <code>.rss</code>. Changes are saved to your skroli config and are used on the next refresh.</div>
         <div class="cols">
-          <div class="col"><h4>Feeds <span>{len(rss.feeds)}</span></h4>{feeds}</div>
-          <div class="col"><h4>Subreddits <span>{len(rss.subreddits)}</span></h4>{subs}</div>
+          <div class="col"><h4>Current feeds <span>{len(rss.feeds)}</span></h4>{feeds}</div>
+          <div class="col"><h4>Current subreddits <span>{len(rss.subreddits)}</span></h4>{subs}</div>
         </div>
-        <div class="hint">Add or remove sources in <code>skroli.config.toml</code>
-          under <code>[ingestors.rss]</code>, then refresh.</div>
+        <div class="field"><label>Feed URLs <span>one per line</span></label>{_textarea('feeds', rss.feeds)}</div>
+        <div class="field"><label>Subreddits <span>one per line; with or without r/</span></label>{_textarea('subreddits', rss.subreddits)}</div>
+        <div class="formrow"><button class="savebtn" onclick="saveIngestors(this)">Save ingestor config</button><span id="ingestors-status" class="status"></span></div>
       </div>
     </div>"""
 
@@ -206,17 +228,46 @@ def _enhancers_page(score: ScoreConfig) -> str:
         <div class="ctitle">Score <span class="pill">built-in</span></div>
         <div class="desc">Ranks the feed by recency. Each item scores
           <code>0.5 ^ (age / half-life)</code> times its source weight, then the
-          feed is sorted high to low.</div>
+          feed is sorted high to low. Changes apply on the next refresh.</div>
         <div class="cols">
           <div class="col"><h4>Parameters</h4>
             <div class="kv"><span>Half-life</span><b>{score.half_life_hours:g} h</b></div>
           </div>
           <div class="col"><h4>Source weights</h4>{weights}</div>
         </div>
-        <div class="hint">Tune these in <code>skroli.config.toml</code>
-          under <code>[enhancers.score]</code>.</div>
+        <div class="field"><label>Half-life hours</label><input name="half_life_hours" type="number" min="0.1" step="0.1" value="{score.half_life_hours:g}"></div>
+        <div class="field"><label>Source weights <span>source = multiplier, one per line</span></label><textarea name="weights" spellcheck="false">{html.escape(_weights_text(score.weights))}</textarea></div>
+        <div class="formrow"><button class="savebtn" onclick="saveEnhancers(this)">Save enhancer config</button><span id="enhancers-status" class="status"></span></div>
       </div>
     </div>"""
+
+def _clean_subreddit(value: str) -> str:
+    sub = value.strip().removeprefix("/r/").removeprefix("r/").strip("/")
+    if "/" in sub:
+        raise ValueError(f"Subreddit must be a name, not a path: {value}")
+    return sub
+
+
+def _parse_weights(raw: str) -> dict[str, float]:
+    weights: dict[str, float] = {}
+    for lineno, line in enumerate(raw.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(f"Weight line {lineno} must use: source = multiplier")
+        source, value = line.split("=", 1)
+        source = source.strip().strip('\"\'')
+        if not source:
+            raise ValueError(f"Weight line {lineno} is missing a source")
+        try:
+            weight = float(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"Weight line {lineno} has an invalid multiplier") from exc
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError(f"Weight line {lineno} multiplier must be a positive number")
+        weights[source] = weight
+    return weights
 
 
 def render_page(items: list[Item], rss: RssConfig, score: ScoreConfig) -> str:
@@ -273,6 +324,37 @@ function show(view, el){{
   el.classList.add('active');
   document.body.classList.toggle('home', view==='home');
 }}
+function lines(name){{
+  const el = document.querySelector(`[name="${{name}}"]`);
+  return el.value.split('\\n').map(v=>v.trim()).filter(Boolean);
+}}
+function setStatus(id, text, cls){{
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = `status ${{cls || ''}}`;
+}}
+async function postConfig(payload){{
+  const res = await fetch('/api/config',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(payload)}});
+  const data = await res.json().catch(()=>({{ok:false,error:'Invalid server response'}}));
+  if(!res.ok || !data.ok) throw new Error(data.error || 'Save failed');
+  return data;
+}}
+async function saveIngestors(btn){{
+  btn.disabled=true; setStatus('ingestors-status','saving…','');
+  try{{
+    await postConfig({{rss:{{feeds:lines('feeds'),subreddits:lines('subreddits')}}}});
+    setStatus('ingestors-status','saved — refresh to fetch new sources','ok');
+  }}catch(err){{ setStatus('ingestors-status',err.message,'err'); }}
+  finally{{ btn.disabled=false; }}
+}}
+async function saveEnhancers(btn){{
+  btn.disabled=true; setStatus('enhancers-status','saving…','');
+  try{{
+    await postConfig({{score:{{half_life_hours:document.querySelector('[name="half_life_hours"]').value,weights:document.querySelector('[name="weights"]').value}}}});
+    setStatus('enhancers-status','saved — refresh to re-score feed','ok');
+  }}catch(err){{ setStatus('enhancers-status',err.message,'err'); }}
+  finally{{ btn.disabled=false; }}
+}}
 async function refresh(btn){{
   btn.disabled=true; btn.classList.add('spin');
   await fetch('/api/refresh',{{method:'POST'}}); location.reload();
@@ -290,11 +372,14 @@ class SkroliViewer:
         on_refresh: Callable[[], None] | None = None,
         rss: RssConfig | None = None,
         score: ScoreConfig | None = None,
+        config: Config | None = None,
     ):
         self.port = port
         self._on_refresh = on_refresh
         self._rss = rss or RssConfig()
         self._score = score or ScoreConfig()
+        self._config = config
+        self._config_path = config.source_path if config else None
         self._items: list[Item] = []
         self._lock = threading.Lock()
         self._httpd: ThreadingHTTPServer | None = None
@@ -306,6 +391,43 @@ class SkroliViewer:
     def _page(self) -> bytes:
         with self._lock:
             return render_page(self._items, self._rss, self._score).encode("utf-8")
+
+    def _save_config(self, payload: dict) -> dict:
+        with self._lock:
+            feeds = list(self._rss.feeds)
+            subreddits = list(self._rss.subreddits)
+            half_life_hours = self._score.half_life_hours
+            weights = dict(self._score.weights)
+
+            if "rss" in payload:
+                rss = payload["rss"] or {}
+                feeds = [str(v).strip() for v in rss.get("feeds", feeds) if str(v).strip()]
+                subreddits = [
+                    _clean_subreddit(str(v))
+                    for v in rss.get("subreddits", subreddits) if str(v).strip()
+                ]
+            if "score" in payload:
+                score = payload["score"] or {}
+                if "half_life_hours" in score:
+                    half_life_hours = float(score["half_life_hours"])
+                    if not math.isfinite(half_life_hours) or half_life_hours <= 0:
+                        raise ValueError("Half-life hours must be a positive number")
+                if "weights" in score:
+                    weights = _parse_weights(str(score.get("weights") or ""))
+
+            self._rss.feeds = feeds
+            self._rss.subreddits = subreddits
+            self._score.half_life_hours = half_life_hours
+            self._score.weights = weights
+
+            if self._config:
+                self._config.rss = self._rss
+                self._config.score = self._score
+                path = write_config(self._config, self._config_path or DEFAULT_CONFIG_NAME)
+            else:
+                path = write_config(Config(rss=self._rss, score=self._score), self._config_path or DEFAULT_CONFIG_NAME)
+            self._config_path = path
+            return {"ok": True, "path": str(path)}
 
     def serve(self, open_window: bool = False) -> None:
         viewer = self
@@ -326,16 +448,26 @@ class SkroliViewer:
                     self.send_response(404)
                     self.end_headers()
 
+            def _json(self, status, payload):
+                body = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
             def do_POST(self):
                 if self.path == "/api/refresh":
                     if viewer._on_refresh:
                         viewer._on_refresh()
-                    body = json.dumps({"ok": True}).encode()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
+                    self._json(200, {"ok": True})
+                elif self.path == "/api/config":
+                    try:
+                        size = int(self.headers.get("Content-Length", "0"))
+                        payload = json.loads(self.rfile.read(size) or b"{}")
+                        self._json(200, viewer._save_config(payload))
+                    except Exception as exc:  # noqa: BLE001 - show validation errors in UI
+                        self._json(400, {"ok": False, "error": str(exc)})
                 else:
                     self.send_response(404)
                     self.end_headers()

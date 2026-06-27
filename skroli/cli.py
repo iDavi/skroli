@@ -20,7 +20,7 @@ def _build_pipeline(config) -> tuple[Pipeline, SkroliViewer]:
     storage = Storage(config.data_dir / "skroli.db")
     ingestors = [RssIngestor(config.rss)]
     enhancers = [ScoreEnhancer(config.score)]
-    viewer = SkroliViewer(port=config.runtime.port, rss=config.rss, score=config.score)
+    viewer = SkroliViewer(port=config.runtime.port, rss=config.rss, score=config.score, config=config)
     pipeline = Pipeline(config, storage, ingestors, enhancers, viewer)
     viewer._on_refresh = pipeline.run_cycle  # wire the "Refresh feed" button
     return pipeline, viewer
