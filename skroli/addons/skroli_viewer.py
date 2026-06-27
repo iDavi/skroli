@@ -131,6 +131,51 @@ body.home .rail{visibility:visible}
 """
 
 
+SCRIPT = r"""
+function show(view, el){
+  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active', v.id===view));
+  document.querySelectorAll('.nav .item').forEach(n=>n.classList.remove('active'));
+  el.classList.add('active');
+  document.body.classList.toggle('home', view==='home');
+}
+function lines(name){
+  const el = document.querySelector(`[name="${name}"]`);
+  return el.value.split('\n').map(v=>v.trim()).filter(Boolean);
+}
+function setStatus(id, text, cls){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = `status ${cls || ''}`;
+}
+async function postConfig(payload){
+  const res = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const data = await res.json().catch(()=>({ok:false,error:'Invalid server response'}));
+  if(!res.ok || !data.ok) throw new Error(data.error || 'Save failed');
+  return data;
+}
+async function saveIngestors(btn){
+  btn.disabled=true; setStatus('ingestors-status','saving…','');
+  try{
+    await postConfig({rss:{feeds:lines('feeds'),subreddits:lines('subreddits')}});
+    setStatus('ingestors-status','saved — refresh to fetch new sources','ok');
+  }catch(err){ setStatus('ingestors-status',err.message,'err'); }
+  finally{ btn.disabled=false; }
+}
+async function saveEnhancers(btn){
+  btn.disabled=true; setStatus('enhancers-status','saving…','');
+  try{
+    await postConfig({score:{half_life_hours:document.querySelector('[name="half_life_hours"]').value,weights:document.querySelector('[name="weights"]').value}});
+    setStatus('enhancers-status','saved — refresh to re-score feed','ok');
+  }catch(err){ setStatus('enhancers-status',err.message,'err'); }
+  finally{ btn.disabled=false; }
+}
+async function refresh(btn){
+  btn.disabled=true; btn.classList.add('spin');
+  await fetch('/api/refresh',{method:'POST'}); location.reload();
+}
+"""
+
+
 def _rel_time(dt) -> str:
     secs = (utcnow() - dt).total_seconds()
     if secs < 60:
@@ -240,6 +285,35 @@ def _enhancers_page(score: ScoreConfig) -> str:
         <div class="formrow"><button class="savebtn" onclick="saveEnhancers(this)">Save enhancer config</button><span id="enhancers-status" class="status"></span></div>
       </div>
     </div>"""
+
+def _clean_subreddit(value: str) -> str:
+    sub = value.strip().removeprefix("/r/").removeprefix("r/").strip("/")
+    if "/" in sub:
+        raise ValueError(f"Subreddit must be a name, not a path: {value}")
+    return sub
+
+
+def _parse_weights(raw: str) -> dict[str, float]:
+    weights: dict[str, float] = {}
+    for lineno, line in enumerate(raw.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise ValueError(f"Weight line {lineno} must use: source = multiplier")
+        source, value = line.split("=", 1)
+        source = source.strip().strip('\"\'')
+        if not source:
+            raise ValueError(f"Weight line {lineno} is missing a source")
+        try:
+            weight = float(value.strip())
+        except ValueError as exc:
+            raise ValueError(f"Weight line {lineno} has an invalid multiplier") from exc
+        if not math.isfinite(weight) or weight <= 0:
+            raise ValueError(f"Weight line {lineno} multiplier must be a positive number")
+        weights[source] = weight
+    return weights
+
 
 def _clean_subreddit(value: str) -> str:
     sub = value.strip().removeprefix("/r/").removeprefix("r/").strip("/")
