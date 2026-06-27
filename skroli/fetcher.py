@@ -73,7 +73,7 @@ class Fetcher:
                     wait = float(retry_after) if retry_after else 0.0
                 except ValueError:
                     wait = 0.0
-                wait = max(wait, 2.0 * (2 ** attempt))
+                wait = max(wait, 5.0 * (2 ** attempt))  # 5s, 10s, 20s…
                 print(f"  · rate-limited (429), retrying in {wait:.0f}s…")
                 time.sleep(wait)
         raise RuntimeError("unreachable")

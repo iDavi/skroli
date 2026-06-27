@@ -230,7 +230,13 @@ function connect(){
     } else if(msg.type==='status'){
       fetching = !!msg.fetching;
       document.getElementById('refresh').classList.toggle('spin', fetching);
-      if(!fetching) renderFeed();   // fetch finished → one settled update
+      if(!fetching){
+        if(msg.origins){   // drop items from sources no longer in the config
+          const valid = new Set(msg.origins);
+          for(const [id,it] of items){ if(it.origin && !valid.has(it.origin)) items.delete(id); }
+        }
+        renderFeed();   // fetch finished → one settled update
+      }
     }
   };
   ws.onclose = () => setTimeout(connect, 1500);

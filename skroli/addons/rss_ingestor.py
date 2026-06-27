@@ -152,23 +152,27 @@ class RssIngestor:
     def __init__(self, config: RssConfig):
         self._config = config
 
-    def _sources(self) -> list[tuple[str, str, str]]:
-        """Return (kind, label, url) for every configured source."""
-        out: list[tuple[str, str, str]] = []
+    def _sources(self) -> list[tuple[str, str, str, str]]:
+        """Return (kind, label, url, origin) for every configured source.
+
+        ``origin`` is a stable id for the configured source (used to purge items
+        when a source is removed from the config)."""
+        out: list[tuple[str, str, str, str]] = []
         for url in self._config.feeds:
-            out.append(("rss", "", url))
+            out.append(("rss", "", url, url))
         for user in self._config.letterboxd:
             u = user.strip().lstrip("@").strip("/")
-            out.append(("rss", f"Letterboxd · {u}", f"https://letterboxd.com/{u}/rss/"))
+            out.append(("rss", f"Letterboxd · {u}", f"https://letterboxd.com/{u}/rss/", f"letterboxd:{u}"))
         for sub in self._config.subreddits:
             name = sub.removeprefix("r/").strip("/")
             out.append((
                 "reddit", f"r/{name}",
                 f"https://www.reddit.com/r/{name}/hot.json?limit={REDDIT_LIMIT}",
+                f"reddit:{name}",
             ))
         return out
 
-    def _parse(self, raw: bytes, label: str, url: str) -> list[Item]:
+    def _parse(self, raw: bytes, label: str, url: str, origin: str) -> list[Item]:
         root = ET.fromstring(raw)
         items: list[Item] = []
 
@@ -184,7 +188,7 @@ class RssIngestor:
                 items.append(self._mk(
                     feed_title, entry_id, link, _text(it.find("title")),
                     _text(it.find("description")), _text(it.find("pubDate")),
-                    _text(it.find("author")), _extract_image(it),
+                    _text(it.find("author")), _extract_image(it), origin,
                 ))
             return items
 
@@ -201,11 +205,11 @@ class RssIngestor:
             author = _text(e.find(f"{ATOM}author/{ATOM}name"))
             items.append(self._mk(
                 feed_title, entry_id, link, _text(e.find(f"{ATOM}title")),
-                body, date, author, _extract_image(e),
+                body, date, author, _extract_image(e), origin,
             ))
         return items
 
-    def _mk(self, source, entry_id, link, title, body, date, author, image) -> Item:
+    def _mk(self, source, entry_id, link, title, body, date, author, image, origin) -> Item:
         return Item(
             id=_stable_id(source, entry_id),
             source=source,
@@ -215,10 +219,10 @@ class RssIngestor:
             author=_clean(author),
             image=image,
             published_at=_parse_date(date),
-            meta={},
+            meta={"origin": origin},
         )
 
-    def _parse_reddit(self, raw: bytes, label: str) -> list[Item]:
+    def _parse_reddit(self, raw: bytes, label: str, origin: str) -> list[Item]:
         """Parse Reddit's JSON listing, capturing score/comments/image."""
         data = json.loads(raw)
         items: list[Item] = []
@@ -247,31 +251,32 @@ class RssIngestor:
                     "engagement": int(d.get("score") or 0),
                     "comments": int(d.get("num_comments") or 0),
                     "comments_url": permalink,
+                    "origin": origin,
                 },
             ))
         return items
 
-    def _fetch_reddit(self, label: str, json_url: str) -> list[Item]:
+    def _fetch_reddit(self, label: str, json_url: str, origin: str) -> list[Item]:
         """Reddit's JSON API (with votes) tends to 403 from some networks; fall
         back to the public .rss feed (no votes) so the subreddit still shows up."""
         name = label.removeprefix("r/")
         try:
-            return self._parse_reddit(fetch(json_url), label)
+            return self._parse_reddit(fetch(json_url), label, origin)
         except urllib.error.HTTPError as exc:
             if exc.code not in (403, 429, 404):
                 raise
             print(f"  · reddit JSON blocked for {label} ({exc.code}); using RSS (no votes)")
             rss = fetch(f"https://www.reddit.com/r/{name}/.rss")
-            return self._parse(rss, label, json_url)
+            return self._parse(rss, label, json_url, origin)
 
     def fetch(self) -> list[Item]:
         items: list[Item] = []
-        for kind, label, url in self._sources():
+        for kind, label, url, origin in self._sources():
             try:
                 if kind == "reddit":
-                    items.extend(self._fetch_reddit(label, url))
+                    items.extend(self._fetch_reddit(label, url, origin))
                 else:
-                    items.extend(self._parse(fetch(url), label, url))
+                    items.extend(self._parse(fetch(url), label, url, origin))
             except Exception as exc:  # noqa: BLE001 - one bad feed shouldn't stop the rest
                 print(f"  ! feed failed ({label or url}): {exc}")
         return items

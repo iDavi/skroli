@@ -122,6 +122,23 @@ class Storage:
             for r in rows
         ]
 
+    def prune_sources(self, valid_origins: set[str]) -> int:
+        """Delete unsaved items whose origin is no longer configured (a source
+        was removed). Items without an origin (legacy) are left alone."""
+        removed = 0
+        with self._lock:
+            rows = self._db.execute("SELECT id, meta FROM items WHERE saved = 0").fetchall()
+            stale = [
+                r["id"] for r in rows
+                if (o := _load_meta(r["meta"]).get("origin")) is not None and o not in valid_origins
+            ]
+            for rid in stale:
+                self._db.execute("DELETE FROM items WHERE id = ?", (rid,))
+            removed = len(stale)
+            if removed:
+                self._db.commit()
+        return removed
+
     def prune(self, retention_hours: int) -> int:
         """Drop unsaved items older than the retention window."""
         cutoff = (utcnow() - timedelta(hours=retention_hours)).timestamp()

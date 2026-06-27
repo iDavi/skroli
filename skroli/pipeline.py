@@ -35,6 +35,7 @@ def item_to_dict(it: Item) -> dict:
         "score": round(it.score, 4),
         "published_at": it.published_at.timestamp(),
         "is_reddit": it.source.startswith("r/"),
+        "origin": it.meta.get("origin"),
         # Engagement signals (present for Reddit / Hacker News items).
         "engagement": it.meta.get("engagement"),
         "comments": it.meta.get("comments"),
@@ -92,9 +93,23 @@ class Engine:
         except Exception as exc:  # noqa: BLE001 - resilience over correctness
             print(f"  ! ingestor '{ingestor.name}' failed: {exc}")
 
+    def _valid_origins(self) -> set[str]:
+        """The set of source origins the current config still includes. Must
+        match the ``meta['origin']`` values the ingestors stamp on items."""
+        c = self.config
+        origins = set(c.rss.feeds)
+        origins |= {f"reddit:{s.removeprefix('r/').strip('/')}" for s in c.rss.subreddits}
+        origins |= {f"letterboxd:{u.strip().lstrip('@').strip('/')}" for u in c.rss.letterboxd}
+        if c.hn.count > 0:
+            origins.add("hn")
+        return origins
+
     def refresh(self) -> None:
         """Kick off a fetch from every ingestor. Returns immediately; items
         stream out over the broadcaster as each source lands."""
+        valid = self._valid_origins()
+        # Drop anything from sources that were removed from the config.
+        self.storage.prune_sources(valid)
         self.broadcaster.publish({"type": "status", "fetching": True})
         threads = [
             threading.Thread(target=self._fetch_one, args=(ing,), daemon=True)
@@ -107,7 +122,10 @@ class Engine:
             for t in threads:
                 t.join()
             self.storage.prune(self.config.runtime.retention_hours)
-            self.broadcaster.publish({"type": "status", "fetching": False})
+            # Tell clients which origins are still valid so they can drop the rest.
+            self.broadcaster.publish(
+                {"type": "status", "fetching": False, "origins": sorted(valid)}
+            )
 
         threading.Thread(target=finish, daemon=True).start()
 

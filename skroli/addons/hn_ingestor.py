@@ -56,6 +56,6 @@ class HackerNewsIngestor:
                 author=hit.get("author") or "",
                 published_at=published,
                 meta={"engagement": points, "comments": comments,
-                      "comments_url": comments_url},
+                      "comments_url": comments_url, "origin": "hn"},
             ))
         return items
