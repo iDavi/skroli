@@ -46,7 +46,9 @@ function openPage(url, title){
   if (!url) return;
   const key = 'page:' + url;
   if (!tabs.find(t => t.key === key)){
-    tabs.push({ key, kind: 'page', title: title || url, url, mode: 'live' });
+    // Reader by default (fast, native). Reddit needs the live old.reddit proxy.
+    const mode = /reddit\.com/.test(url) ? 'live' : 'reader';
+    tabs.push({ key, kind: 'page', title: title || url, url, mode });
     const div = document.createElement('div');
     div.className = 'tabview'; div.dataset.key = key;
     div.innerHTML = '<div class="empty">Opening…</div>';
@@ -113,7 +115,7 @@ function loadPage(key, url, div){
   if (mode === 'live'){
     // Live page via the same-origin proxy (loads sites that block framing).
     div.innerHTML = bbar(key, url, mode) +
-      '<div class="bcontent"><iframe class="bframe" sandbox="allow-scripts allow-forms allow-popups" ' +
+      '<div class="bcontent"><iframe class="bframe" sandbox="allow-scripts allow-forms" ' +
       'src="/proxy?url=' + encodeURIComponent(url) + '"></iframe></div>';
   } else {
     div.innerHTML = bbar(key, url, mode) + '<div class="bcontent"><div class="empty">Loading…</div></div>';

@@ -217,6 +217,7 @@ def proxy(url: str) -> tuple[bytes, str]:
     if "html" not in ctype.lower():
         return raw, ctype  # images/css/etc. pass through untouched
     text = raw.decode("utf-8", "replace")
+    text = re.sub(r'\starget=(["\'])_blank\1', "", text, flags=re.I)  # no new windows
     inject = f'<base href="{_html.escape(target)}">' + _NAV_SHIM
     if re.search(r"<head[^>]*>", text, re.I):
         text = re.sub(r"<head[^>]*>", lambda m: m.group(0) + inject, text, count=1, flags=re.I)
