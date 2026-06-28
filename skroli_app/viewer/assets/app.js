@@ -2,21 +2,45 @@
    Tabs are the core navigation. Internal pages (Feed / Ingestors / Enhancers)
    and opened posts are all tabs; the sidebar just opens/focuses them. Tabs can
    be reordered (drag) and closed, and there's always at least one open. */
-let tabs = [{ key: 'feed', kind: 'feed', title: 'Feed' }];
-let activeKey = 'feed';
-const INTERNAL = { home: ['feed', 'Feed'], ingestors: ['ingestors', 'Ingestors'], enhancers: ['enhancers', 'Enhancers'] };
+let tabs = [];
+let activeKey = null;
+let feedSeq = 0;
+const SINGLE = { ingestors: 'Ingestors', enhancers: 'Enhancers' };
 
 function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
 
 function show(view){                       // sidebar launcher → open/focus a tab
-  const [kind, title] = INTERNAL[view] || [];
-  if (kind) openInternal(kind, title);
+  if (view === 'home') focusOrNewFeed();
+  else if (SINGLE[view]) openSingle(view, SINGLE[view]);
 }
-function openInternal(kind, title){
+function openSingle(kind, title){          // Ingestors / Enhancers are singletons
   let t = tabs.find(x => x.kind === kind);
   if (!t){ t = { key: kind, kind, title }; tabs.push(t); }
   activeKey = t.key;
   render();
+}
+function ensureFeedView(key){
+  if (document.querySelector('#feeds .feedview[data-key="'+CSS.escape(key)+'"]')) return;
+  const div = document.createElement('div');
+  div.className = 'feedview'; div.dataset.key = key;
+  div.innerHTML =
+    '<div class="head"><h1>Feed</h1><span class="count">0 items</span>'+
+    '<button class="iconbtn refreshbtn" title="Refresh feed">'+
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+
+    '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button></div>'+
+    '<div class="posts"><div class="empty">Loading your feed…</div></div>';
+  document.getElementById('feeds').appendChild(div);
+}
+function newFeed(){                        // every + opens another feed tab
+  const key = 'feed:' + (++feedSeq);
+  tabs.push({ key, kind: 'feed', title: 'Feed' });
+  ensureFeedView(key);
+  activeKey = key; render();
+  _lastSig = ''; renderFeed();            // populate the new feed view now
+}
+function focusOrNewFeed(){
+  const f = tabs.find(t => t.kind === 'feed');
+  if (f){ activeKey = f.key; render(); } else newFeed();
 }
 function openPage(url, title){
   if (!url) return;
@@ -37,11 +61,9 @@ function closeTab(key){
   if (i < 0) return;
   const t = tabs[i];
   tabs.splice(i, 1);
-  if (t.kind === 'page'){
-    const d = document.querySelector('#browser .tabview[data-key="' + CSS.escape(key) + '"]');
-    if (d) d.remove();
-  }
-  if (!tabs.length) tabs.push({ key: 'feed', kind: 'feed', title: 'Feed' });
+  const host = t.kind === 'page' ? '#browser .tabview' : (t.kind === 'feed' ? '#feeds .feedview' : null);
+  if (host){ const d = document.querySelector(host + '[data-key="' + CSS.escape(key) + '"]'); if (d) d.remove(); }
+  if (!tabs.length){ newFeed(); return; }   // always ≥1 tab
   if (activeKey === key) activeKey = (tabs[Math.max(0, i - 1)] || tabs[0]).key;
   render();
 }
@@ -54,12 +76,12 @@ function reorder(fromKey, toKey){
 }
 function render(){
   const at = activeTab();
-  document.getElementById('home').classList.toggle('active', at.kind === 'feed');
+  document.getElementById('feeds').classList.toggle('active', at.kind === 'feed');
+  document.getElementById('browser').classList.toggle('active', at.kind === 'page');
   document.getElementById('ingestors').classList.toggle('active', at.kind === 'ingestors');
   document.getElementById('enhancers').classList.toggle('active', at.kind === 'enhancers');
-  document.getElementById('browser').classList.toggle('active', at.kind === 'page');
-  document.querySelectorAll('#browser .tabview').forEach(tv =>
-    tv.classList.toggle('active', tv.dataset.key === activeKey));
+  document.querySelectorAll('#feeds .feedview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
+  document.querySelectorAll('#browser .tabview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
   const navIndex = { feed: 0, ingestors: 1, enhancers: 2 };
   document.querySelectorAll('.nav .item').forEach((n, i) => n.classList.toggle('active', i === navIndex[at.kind]));
   document.body.classList.toggle('home', at.kind === 'feed');     // rail only on the feed
@@ -69,11 +91,12 @@ function render(){
 function renderTabs(){
   let h = '';
   tabs.forEach(t => {
-    h += '<div class="tab' + (t.key === activeKey ? ' active' : '') + '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(t.title) + '">' +
+    const tip = t.url ? t.title + '\n' + t.url : t.title;
+    h += '<div class="tab' + (t.key === activeKey ? ' active' : '') + '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(tip) + '">' +
          '<span class="tlabel">' + esc(t.title) + '</span>' +
          '<span class="tclose" data-close="1">×</span></div>';
   });
-  h += '<div class="tabadd" id="tabadd" title="New tab">+</div>';
+  h += '<div class="tabadd" id="tabadd" title="New feed tab">+</div>';
   document.getElementById('tabs').innerHTML = h;
 }
 async function loadPage(key, url, div){
@@ -99,9 +122,10 @@ function browserView(d){
 }
 let _dragKey = null;
 document.addEventListener('DOMContentLoaded', ()=>{
+  newFeed();                       // the app opens with one feed tab
   const bar = document.getElementById('tabs');
   bar.addEventListener('click', e => {
-    if (e.target.id === 'tabadd'){ openInternal('feed', 'Feed'); return; }
+    if (e.target.id === 'tabadd'){ newFeed(); return; }
     const tab = e.target.closest('.tab'); if (!tab) return;
     if (e.target.closest('.tclose')) closeTab(tab.dataset.key);
     else { activeKey = tab.dataset.key; render(); }
@@ -114,13 +138,13 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if (t && _dragKey) reorder(_dragKey, t.dataset.key);
     _dragKey = null;
   });
-  document.getElementById('posts').addEventListener('click', e => {
+  document.getElementById('feeds').addEventListener('click', e => {
+    if (e.target.closest('.refreshbtn')){ refresh(e.target.closest('.refreshbtn')); return; }
     const link = e.target.closest('[data-open]');
     if (link){ e.stopPropagation(); openPage(link.dataset.open, link.dataset.openTitle || ''); return; }
     const post = e.target.closest('.post');
     if (post && post.dataset.url) openPage(post.dataset.url, post.dataset.title);
   });
-  render();
 });
 
 /* ----- live feed over WebSocket ----- */
@@ -168,15 +192,11 @@ function renderFeed(){
   const sig = arr.map(it=>it.id+':'+(it.score||0)).join(',') + '|' + ready + '|' + fetching;
   if(sig === _lastSig) return;
   _lastSig = sig;
-  const feed = document.getElementById('posts');
-  if(arr.length===0){
-    feed.innerHTML = (ready && !fetching)
-      ? '<div class="empty">No items yet. Add feeds in Ingestors, then refresh.</div>'
-      : '<div class="empty">Loading your feed…</div>';
-  } else {
-    feed.innerHTML = arr.map(postHTML).join('');
-  }
-  document.getElementById('count').textContent = arr.length + ' items';
+  const html = arr.length
+    ? arr.map(postHTML).join('')
+    : '<div class="empty">'+((ready && !fetching) ? 'No items yet. Add feeds in Ingestors, then refresh.' : 'Loading your feed…')+'</div>';
+  document.querySelectorAll('#feeds .feedview .posts').forEach(p => p.innerHTML = html);
+  document.querySelectorAll('#feeds .feedview .count').forEach(c => c.textContent = arr.length + ' items');
   const counts = {};
   arr.forEach(it => counts[it.source] = (counts[it.source]||0)+1);
   const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]);
@@ -203,7 +223,7 @@ function connect(){
       ready = true; renderFeed();
     } else if(msg.type==='status'){
       fetching = !!msg.fetching;
-      document.getElementById('refresh').classList.toggle('spin', fetching);
+      document.querySelectorAll('.refreshbtn').forEach(b=>b.classList.toggle('spin', fetching));
       if(!fetching){
         if(msg.origins){   // drop items from sources no longer in the config
           const valid = new Set(msg.origins);

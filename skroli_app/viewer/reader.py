@@ -11,8 +11,9 @@ from __future__ import annotations
 import html as _html
 import re
 import urllib.request
+import json
 from html.parser import HTMLParser
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 USER_AGENT = "Mozilla/5.0 (compatible; skroli/0.0.1; +https://github.com/iDavi/skroli)"
 _MAX_BYTES = 3_000_000
@@ -125,25 +126,73 @@ class _Sanitizer(HTMLParser):
         return out.strip()
 
 
+def _sanitize(html_fragment: str, base: str) -> str:
+    s = _Sanitizer(base)
+    s.feed(html_fragment)
+    return s.result()
+
+
+def _reddit(url: str) -> dict:
+    """Render a Reddit post + top comments natively from its JSON (the page
+    itself is JS-rendered, so reader extraction comes back empty)."""
+    raw, _ = _fetch(url.split("?")[0].rstrip("/") + ".json")
+    data = json.loads(raw)
+    post = data[0]["data"]["children"][0]["data"]
+    parts = []
+    if post.get("selftext_html"):
+        parts.append(_sanitize(_html.unescape(post["selftext_html"]), url))
+    elif post.get("url") and not post.get("is_self"):
+        u = _html.escape(post["url"])
+        parts.append(f'<p><a href="{u}" target="_blank" rel="noopener">{u}</a></p>')
+    comments = data[1]["data"]["children"] if len(data) > 1 else []
+    rendered = []
+    for c in comments:
+        if c.get("kind") != "t1":
+            continue
+        d = c["data"]
+        if not d.get("body_html"):
+            continue
+        rendered.append(
+            f'<div class="rcomment"><div class="rcmeta">{_html.escape(d.get("author","?"))}'
+            f' · ▲ {d.get("score", 0)}</div>{_sanitize(_html.unescape(d["body_html"]), url)}</div>'
+        )
+        if len(rendered) >= 40:
+            break
+    body = "".join(parts)
+    if rendered:
+        body += '<h3 class="rch">Comments</h3>' + "".join(rendered)
+    return {
+        "mode": "reader", "url": url, "title": post.get("title", "(untitled)"),
+        "byline": "r/" + post.get("subreddit", ""), "image": "", "html": body,
+    }
+
+
 def open_url(url: str) -> dict:
-    """Return how the UI should open ``url``: as an iframe (framable) or a
-    server-extracted reader view (not framable / on error)."""
+    """How the UI should open ``url``. Native/reader rendering is preferred; an
+    iframe is only used as a last resort for framable pages we can't extract."""
     if not url:
         return {"mode": "error", "url": url, "error": "no url"}
+    host = urlparse(url).netloc.lower()
+    if host.endswith("reddit.com") and "/comments/" in url:
+        try:
+            return _reddit(url)
+        except Exception:  # noqa: BLE001 - fall through to generic reader
+            pass
     try:
         raw, headers = _fetch(url)
     except Exception as exc:  # noqa: BLE001 - surface fetch errors to the UI
         return {"mode": "error", "url": url, "error": str(exc)}
-    if _frames_allowed(headers):
-        return {"mode": "iframe", "url": url}
     text = raw.decode("utf-8", "replace")
-    sanitizer = _Sanitizer(url)
-    sanitizer.feed(_region(text))
+    body = _sanitize(_region(text), url)
+    # Reader by default; only iframe if extraction is basically empty AND the
+    # site permits framing (a JS app we can't read but can embed).
+    if len(body) < 600 and _frames_allowed(headers):
+        return {"mode": "iframe", "url": url}
     return {
         "mode": "reader",
         "url": url,
         "title": _title(text),
         "byline": _meta(text, "author") or _meta(text, "article:author"),
         "image": _meta(text, "og:image"),
-        "html": sanitizer.result(),
+        "html": body,
     }
