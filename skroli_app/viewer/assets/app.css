@@ -152,9 +152,6 @@ body.home .rail .panel{display:block}
 .reader .rbody a{color:var(--gold);text-decoration:underline}
 .reader .rbody blockquote{border-left:3px solid var(--olive-line);padding-left:16px;color:var(--parchment-dim);margin:0 0 18px}
 .reader .rbody pre{background:var(--card);border:1px solid var(--olive-line);padding:14px;overflow-x:auto;font-size:14px;margin:0 0 18px}
-/* While reading a post, give the browser the full width. */
-body.reading .feed{flex:1 1 auto;width:auto;overflow:hidden}
-body.reading .rail{display:none}
 .tab[draggable="true"]{cursor:grab}
 .tab.active[draggable="true"]{cursor:default}
 .tabadd{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:40px;height:44px;
@@ -171,3 +168,11 @@ body.reading .rail{display:none}
 .reader .rcomment{border-left:2px solid var(--olive-line);padding:4px 0 4px 14px;margin:0 0 14px}
 .reader .rcomment .rcmeta{font-size:13px;color:var(--stone);margin-bottom:4px}
 .reader .rcomment p{margin:0 0 8px}
+
+/* source "profile" pages */
+#sourceviews .sourceview{display:none}
+#sourceviews .sourceview.active{display:block}
+/* clickable source avatar / name */
+.post .src[data-source]{cursor:pointer}
+.post .name[data-source]{cursor:pointer}
+.post .name[data-source]:hover{text-decoration:underline}

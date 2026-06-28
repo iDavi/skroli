@@ -1,23 +1,16 @@
-/* ----- the app is a browser: everything is a tab ----------------------------
-   Tabs are the core navigation. Internal pages (Feed / Ingestors / Enhancers)
-   and opened posts are all tabs; the sidebar just opens/focuses them. Tabs can
-   be reordered (drag) and closed, and there's always at least one open. */
+/* ----- the app is a browser ------------------------------------------------
+   The tab strip holds browsing tabs only: feeds, opened pages, and source
+   "profile" pages. Ingestors / Enhancers are sidebar views, NOT tabs. */
 let tabs = [];
 let activeKey = null;
+let section = 'browse';   // 'browse' | 'ingestors' | 'enhancers'
 let feedSeq = 0;
-const SINGLE = { ingestors: 'Ingestors', enhancers: 'Enhancers' };
 
 function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
 
-function show(view){                       // sidebar launcher → open/focus a tab
-  if (view === 'home') focusOrNewFeed();
-  else if (SINGLE[view]) openSingle(view, SINGLE[view]);
-}
-function openSingle(kind, title){          // Ingestors / Enhancers are singletons
-  let t = tabs.find(x => x.kind === kind);
-  if (!t){ t = { key: kind, kind, title }; tabs.push(t); }
-  activeKey = t.key;
-  render();
+function show(view){      // sidebar: Home goes to the feed; the others are views
+  if (view === 'home'){ section = 'browse'; focusOrNewFeed(); }
+  else { section = view; render(); }
 }
 function ensureFeedView(key){
   if (document.querySelector('#feeds .feedview[data-key="'+CSS.escape(key)+'"]')) return;
@@ -32,23 +25,38 @@ function ensureFeedView(key){
   document.getElementById('feeds').appendChild(div);
 }
 function newFeed(){                        // every + opens another feed tab
+  section = 'browse';
   const key = 'feed:' + (++feedSeq);
   tabs.push({ key, kind: 'feed', title: 'Feed' });
   ensureFeedView(key);
   activeKey = key; render();
-  _lastSig = ''; renderFeed();            // populate the new feed view now
+  _lastSig = ''; renderFeed();
 }
 function focusOrNewFeed(){
   const f = tabs.find(t => t.kind === 'feed');
-  if (f){ activeKey = f.key; render(); } else newFeed();
+  if (f){ activeKey = f.key; section = 'browse'; render(); } else newFeed();
+}
+function ensureSourceView(key, source){
+  if (document.querySelector('#sourceviews .sourceview[data-key="'+CSS.escape(key)+'"]')) return;
+  const div = document.createElement('div');
+  div.className = 'sourceview'; div.dataset.key = key; div.dataset.source = source;
+  div.innerHTML = '<div class="head"><h1>'+esc(source)+'</h1><span class="count">0 items</span></div>'+
+                  '<div class="posts"><div class="empty">No posts from this source yet.</div></div>';
+  document.getElementById('sourceviews').appendChild(div);
+}
+function openSource(source){               // click an avatar/name → that source's posts
+  if (!source) return;
+  section = 'browse';
+  const key = 'source:' + source;
+  if (!tabs.find(t => t.key === key)){ tabs.push({ key, kind: 'source', title: source, source }); ensureSourceView(key, source); }
+  activeKey = key; render(); _lastSig = ''; renderFeed();
 }
 function openPage(url, title){
   if (!url) return;
+  section = 'browse';
   const key = 'page:' + url;
   if (!tabs.find(t => t.key === key)){
-    // Reader by default (fast, native). Reddit needs the live old.reddit proxy.
-    const mode = /reddit\.com/.test(url) ? 'live' : 'reader';
-    tabs.push({ key, kind: 'page', title: title || url, url, mode });
+    tabs.push({ key, kind: 'page', title: title || url, url });
     const div = document.createElement('div');
     div.className = 'tabview'; div.dataset.key = key;
     div.innerHTML = '<div class="empty">Opening…</div>';
@@ -63,7 +71,7 @@ function closeTab(key){
   if (i < 0) return;
   const t = tabs[i];
   tabs.splice(i, 1);
-  const host = t.kind === 'page' ? '#browser .tabview' : (t.kind === 'feed' ? '#feeds .feedview' : null);
+  const host = { page: '#browser .tabview', feed: '#feeds .feedview', source: '#sourceviews .sourceview' }[t.kind];
   if (host){ const d = document.querySelector(host + '[data-key="' + CSS.escape(key) + '"]'); if (d) d.remove(); }
   if (!tabs.length){ newFeed(); return; }   // always ≥1 tab
   if (activeKey === key) activeKey = (tabs[Math.max(0, i - 1)] || tabs[0]).key;
@@ -77,65 +85,57 @@ function reorder(fromKey, toKey){
   render();
 }
 function render(){
+  const browse = section === 'browse';
   const at = activeTab();
-  document.getElementById('feeds').classList.toggle('active', at.kind === 'feed');
-  document.getElementById('browser').classList.toggle('active', at.kind === 'page');
-  document.getElementById('ingestors').classList.toggle('active', at.kind === 'ingestors');
-  document.getElementById('enhancers').classList.toggle('active', at.kind === 'enhancers');
+  const kind = browse && at ? at.kind : null;
+  document.getElementById('feeds').classList.toggle('active', kind === 'feed');
+  document.getElementById('sourceviews').classList.toggle('active', kind === 'source');
+  document.getElementById('browser').classList.toggle('active', kind === 'page');
+  document.getElementById('ingestors').classList.toggle('active', section === 'ingestors');
+  document.getElementById('enhancers').classList.toggle('active', section === 'enhancers');
   document.querySelectorAll('#feeds .feedview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
+  document.querySelectorAll('#sourceviews .sourceview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
   document.querySelectorAll('#browser .tabview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
-  const navIndex = { feed: 0, ingestors: 1, enhancers: 2 };
-  document.querySelectorAll('.nav .item').forEach((n, i) => n.classList.toggle('active', i === navIndex[at.kind]));
-  document.body.classList.toggle('home', at.kind === 'feed');     // rail only on the feed
-  document.body.classList.toggle('reading', at.kind === 'page');  // widen for the browser
+  const navSel = section === 'ingestors' ? 1 : section === 'enhancers' ? 2 : 0;
+  document.querySelectorAll('.nav .item').forEach((n, i) => n.classList.toggle('active', i === navSel));
+  document.body.classList.toggle('home', kind === 'feed');   // rail only on the feed
   renderTabs();
 }
 function renderTabs(){
   let h = '';
   tabs.forEach(t => {
+    const active = section === 'browse' && t.key === activeKey;
     const tip = t.url ? t.title + '\n' + t.url : t.title;
-    h += '<div class="tab' + (t.key === activeKey ? ' active' : '') + '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(tip) + '">' +
+    h += '<div class="tab' + (active ? ' active' : '') + '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(tip) + '">' +
          '<span class="tlabel">' + esc(t.title) + '</span>' +
          '<span class="tclose" data-close="1">×</span></div>';
   });
   h += '<div class="tabadd" id="tabadd" title="New feed tab">+</div>';
   document.getElementById('tabs').innerHTML = h;
 }
-function bbar(key, url, mode){
-  const toggle = mode === 'live' ? 'reader view' : 'live view';
-  const next = mode === 'live' ? 'reader' : 'live';
-  return '<div class="bbar">' +
-    '<a class="act" href="' + esc(url) + '" target="_blank" rel="noopener">open original ↗</a>' +
-    '<button class="act modebtn" data-key="' + esc(key) + '" data-mode="' + next + '">' + toggle + '</button>' +
-    '</div>';
-}
 function loadPage(key, url, div){
-  const tab = tabs.find(t => t.key === key);
-  const mode = tab ? (tab.mode || 'live') : 'live';
-  if (mode === 'live'){
-    // Live page via the same-origin proxy (loads sites that block framing).
-    div.innerHTML = bbar(key, url, mode) +
-      '<div class="bcontent"><iframe class="bframe" sandbox="allow-scripts allow-forms" ' +
-      'src="/proxy?url=' + encodeURIComponent(url) + '"></iframe></div>';
-  } else {
-    div.innerHTML = bbar(key, url, mode) + '<div class="bcontent"><div class="empty">Loading…</div></div>';
-    fetch('/api/read?url=' + encodeURIComponent(url)).then(r => r.json()).then(d => {
-      const img = d.image ? '<img class="rimg" src="' + esc(d.image) + '" alt="" onerror="this.remove()">' : '';
-      const by  = d.byline ? '<div class="rby">' + esc(d.byline) + '</div>' : '';
-      div.querySelector('.bcontent').innerHTML =
-        '<article class="reader"><h1>' + esc(d.title || '') + '</h1>' + by + img +
-        '<div class="rbody">' + (d.html || '<p>(no readable content)</p>') + '</div></article>';
-      if (d.title && tab){ tab.title = d.title; renderTabs(); }
-    }).catch(()=>{ div.querySelector('.bcontent').innerHTML = '<div class="empty">Couldn’t load this page.</div>'; });
-  }
+  // Live page via the same-origin proxy (loads sites that block framing).
+  div.innerHTML =
+    '<div class="bbar"><a class="act" href="' + esc(url) + '" target="_blank" rel="noopener">open original ↗</a></div>' +
+    '<div class="bcontent"><iframe class="bframe" sandbox="allow-scripts allow-forms" ' +
+    'src="/proxy?url=' + encodeURIComponent(url) + '"></iframe></div>';
 }
 function reloadTab(key){
   const tab = tabs.find(t => t.key === key);
   const div = document.querySelector('#browser .tabview[data-key="' + CSS.escape(key) + '"]');
   if (tab && div) loadPage(key, tab.url, div);
 }
-function setMode(key, mode){ const t = tabs.find(x => x.key === key); if (t){ t.mode = mode; reloadTab(key); } }
 function navigateTab(key, url){ const t = tabs.find(x => x.key === key); if (t){ t.url = url; t.title = url; reloadTab(key); renderTabs(); } }
+
+function onPostClick(e){
+  if (e.target.closest('.refreshbtn')){ refresh(e.target.closest('.refreshbtn')); return; }
+  const src = e.target.closest('[data-source]');
+  if (src){ e.stopPropagation(); openSource(src.dataset.source); return; }
+  const link = e.target.closest('[data-open]');
+  if (link){ e.stopPropagation(); openPage(link.dataset.open, link.dataset.openTitle || ''); return; }
+  const post = e.target.closest('.post');
+  if (post && post.dataset.url) openPage(post.dataset.url, post.dataset.title);
+}
 let _dragKey = null;
 document.addEventListener('DOMContentLoaded', ()=>{
   newFeed();                       // the app opens with one feed tab
@@ -144,7 +144,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if (e.target.id === 'tabadd'){ newFeed(); return; }
     const tab = e.target.closest('.tab'); if (!tab) return;
     if (e.target.closest('.tclose')) closeTab(tab.dataset.key);
-    else { activeKey = tab.dataset.key; render(); }
+    else { section = 'browse'; activeKey = tab.dataset.key; render(); }
   });
   bar.addEventListener('dragstart', e => { const t = e.target.closest('.tab'); if (t) _dragKey = t.dataset.key; });
   bar.addEventListener('dragover', e => e.preventDefault());
@@ -154,25 +154,9 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if (t && _dragKey) reorder(_dragKey, t.dataset.key);
     _dragKey = null;
   });
-  document.getElementById('feeds').addEventListener('click', e => {
-    if (e.target.closest('.refreshbtn')){ refresh(e.target.closest('.refreshbtn')); return; }
-    const link = e.target.closest('[data-open]');
-    if (link){ e.stopPropagation(); openPage(link.dataset.open, link.dataset.openTitle || ''); return; }
-    const post = e.target.closest('.post');
-    if (post && post.dataset.url) openPage(post.dataset.url, post.dataset.title);
-  });
-  // Browser pane: reader-link clicks and the live/reader toggle stay in-app.
-  document.getElementById('browser').addEventListener('click', e => {
-    const mb = e.target.closest('.modebtn');
-    if (mb){ setMode(mb.dataset.key, mb.dataset.mode); return; }
-    const a = e.target.closest('.bcontent a');
-    if (a && a.getAttribute('href')){
-      e.preventDefault();
-      const tv = a.closest('.tabview');
-      if (tv) navigateTab(tv.dataset.key, a.href);
-    }
-  });
-  // Links clicked inside a proxied (live) page post back here to navigate in-tab.
+  document.getElementById('feeds').addEventListener('click', onPostClick);
+  document.getElementById('sourceviews').addEventListener('click', onPostClick);
+  // Links inside a proxied (live) page post back here to navigate in the same tab.
   window.addEventListener('message', e => {
     const nav = e.data && e.data.skroliNav;
     if (!nav) return;
@@ -213,8 +197,10 @@ function postHTML(it){
   const ctxt = (it.comments != null) ? 'comments ('+it.comments+')' : 'comments';
   const comments = it.comments_url
     ? '<span class="act" data-open="'+esc(it.comments_url)+'" data-open-title="'+esc(it.source+' — comments')+'">'+ctxt+'</span>' : '';
-  return '<article class="post" data-url="'+esc(it.url)+'" data-title="'+esc(it.title)+'"><div class="src '+a.cls+'">'+esc(a.badge)+'</div><div class="body">'+
-    '<div class="meta"><span class="name">'+esc(it.source)+'</span>'+
+  // Hacker News opens on its comments/discussion by default.
+  const openUrl = (it.source === 'Hacker News' && it.comments_url) ? it.comments_url : it.url;
+  return '<article class="post" data-url="'+esc(openUrl)+'" data-title="'+esc(it.title)+'"><div class="src '+a.cls+'" data-source="'+esc(it.source)+'" title="'+esc(it.source)+'">'+esc(a.badge)+'</div><div class="body">'+
+    '<div class="meta"><span class="name" data-source="'+esc(it.source)+'">'+esc(it.source)+'</span>'+
     '<span class="dot">·</span><span>'+relTime(it.published_at)+'</span>'+eng+'</div>'+
     '<div class="title">'+esc(it.title)+'</div>'+
     '<div class="excerpt">'+esc(it.excerpt)+'</div>'+ media +
@@ -234,6 +220,13 @@ function renderFeed(){
     : '<div class="empty">'+((ready && !fetching) ? 'No items yet. Add feeds in Ingestors, then refresh.' : 'Loading your feed…')+'</div>';
   document.querySelectorAll('#feeds .feedview .posts').forEach(p => p.innerHTML = html);
   document.querySelectorAll('#feeds .feedview .count').forEach(c => c.textContent = arr.length + ' items');
+  // Source "profile" pages: same posts, filtered to that source.
+  document.querySelectorAll('#sourceviews .sourceview').forEach(v => {
+    const mine = arr.filter(it => it.source === v.dataset.source);
+    v.querySelector('.posts').innerHTML = mine.length ? mine.map(postHTML).join('')
+      : '<div class="empty">No posts from this source right now.</div>';
+    v.querySelector('.count').textContent = mine.length + ' items';
+  });
   const counts = {};
   arr.forEach(it => counts[it.source] = (counts[it.source]||0)+1);
   const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]);
