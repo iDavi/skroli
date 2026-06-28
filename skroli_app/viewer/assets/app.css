@@ -121,3 +121,33 @@ body.home .rail .panel{display:block}
 .srcrow{display:flex;align-items:center;justify-content:space-between;padding:9px 0;
  font-size:15px;color:var(--parchment-dim);border-top:1px solid var(--olive-line)}
 .srcrow .c{color:var(--stone);font-size:13px}
+
+/* ---------- in-app browser tabs ---------- */
+.post{cursor:pointer}
+.tabs{display:flex;position:sticky;top:0;z-index:3;background:rgba(79,75,59,.95);
+ border-bottom:1px solid var(--olive-line);overflow-x:auto}
+.tab{display:flex;align-items:center;gap:8px;padding:11px 14px;font-size:14px;cursor:pointer;
+ color:var(--parchment-dim);border-right:1px solid var(--olive-line);max-width:220px;flex:0 0 auto}
+.tab:hover{background:var(--card)}
+.tab.active{background:var(--card);color:var(--parchment);box-shadow:inset 0 -2px 0 var(--gold)}
+.tab .tlabel{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tab .tclose{color:var(--stone);font-size:16px;line-height:1}
+.tab .tclose:hover{color:var(--parchment)}
+#browser .tabview{display:none}
+#browser .tabview.active{display:block}
+.bbar{padding:9px 16px;border-bottom:1px solid var(--olive-line);font-size:13px;color:var(--stone)}
+.bframe{width:100%;height:calc(100vh - 47px);border:0;background:#fff;display:block}
+.reader{max-width:680px;margin:0 auto;padding:30px 26px 80px}
+.reader h1{font-size:30px;line-height:1.2;margin-bottom:10px}
+.reader .rby{color:var(--stone);font-size:14px;margin-bottom:18px}
+.reader .rimg{width:100%;border:1px solid var(--olive-line);margin-bottom:20px}
+.reader .rbody{font-size:17px;line-height:1.75;color:var(--parchment)}
+.reader .rbody p{margin:0 0 18px}
+.reader .rbody h2,.reader .rbody h3{margin:26px 0 10px}
+.reader .rbody img{max-width:100%;height:auto;margin:18px 0;border:1px solid var(--olive-line)}
+.reader .rbody a{color:var(--gold);text-decoration:underline}
+.reader .rbody blockquote{border-left:3px solid var(--olive-line);padding-left:16px;color:var(--parchment-dim);margin:0 0 18px}
+.reader .rbody pre{background:var(--card);border:1px solid var(--olive-line);padding:14px;overflow-x:auto;font-size:14px;margin:0 0 18px}
+/* While reading a post, give the browser the full width. */
+body.reading .feed{flex:1 1 auto;width:auto}
+body.reading .rail{display:none}

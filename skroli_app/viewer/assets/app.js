@@ -1,9 +1,96 @@
-function show(view, el){
-  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active', v.id===view));
+/* ----- navigation + in-app browser tabs ----- */
+let nav = 'home';            // 'home' | 'ingestors' | 'enhancers'
+let activeTab = 'feed';      // 'feed' | a post url
+const tabs = [];             // [{url, title}]
+
+function show(view, el){      // nav clicks (Home / Ingestors / Enhancers)
+  nav = view;
   document.querySelectorAll('.nav .item').forEach(n=>n.classList.remove('active'));
-  el.classList.add('active');
-  document.body.classList.toggle('home', view==='home');
+  if(el) el.classList.add('active');
+  render();
 }
+function render(){
+  const browsing = nav === 'home';
+  const onFeed = browsing && activeTab === 'feed';
+  document.getElementById('tabs').style.display = browsing ? '' : 'none';
+  document.getElementById('home').classList.toggle('active', onFeed);
+  document.getElementById('browser').classList.toggle('active', browsing && !onFeed);
+  document.getElementById('ingestors').classList.toggle('active', nav === 'ingestors');
+  document.getElementById('enhancers').classList.toggle('active', nav === 'enhancers');
+  document.body.classList.toggle('home', onFeed);   // rail only on the feed
+  document.body.classList.toggle('reading', browsing && !onFeed);  // widen for the browser
+  document.querySelectorAll('#browser .tabview').forEach(tv=>
+    tv.classList.toggle('active', tv.dataset.url === activeTab));
+  renderTabs();
+}
+function renderTabs(){
+  const bar = document.getElementById('tabs');
+  let h = '<div class="tab'+(activeTab==='feed'?' active':'')+'" data-url="feed">Feed</div>';
+  tabs.forEach(t=>{
+    h += '<div class="tab'+(activeTab===t.url?' active':'')+'" data-url="'+esc(t.url)+'" title="'+esc(t.title)+'">'+
+         '<span class="tlabel">'+esc(t.title||t.url)+'</span>'+
+         '<span class="tclose" data-close="1">×</span></div>';
+  });
+  bar.innerHTML = h;
+}
+function setTab(key){ activeTab = key; if(nav!=='home') nav='home'; render(); }
+function closeTab(url){
+  const i = tabs.findIndex(t=>t.url===url);
+  if(i<0) return;
+  tabs.splice(i,1);
+  const div = document.querySelector('#browser .tabview[data-url="'+CSS.escape(url)+'"]');
+  if(div) div.remove();
+  if(activeTab===url) activeTab = tabs.length ? tabs[Math.max(0,i-1)].url : 'feed';
+  render();
+}
+function openTab(url, title){
+  if(!url) return;
+  if(!tabs.find(t=>t.url===url)){
+    tabs.push({url, title: title || url});
+    const div = document.createElement('div');
+    div.className = 'tabview'; div.dataset.url = url;
+    div.innerHTML = '<div class="empty">Opening…</div>';
+    document.getElementById('browser').appendChild(div);
+    loadTab(url, div);
+  }
+  activeTab = url; nav = 'home';
+  document.querySelectorAll('.nav .item').forEach((n,i)=>n.classList.toggle('active', i===0));
+  render();
+}
+async function loadTab(url, div){
+  try{
+    const d = await (await fetch('/api/open?url='+encodeURIComponent(url))).json();
+    div.innerHTML = browserView(d);
+    if(d.mode==='reader' && d.title){ const t=tabs.find(x=>x.url===url); if(t){ t.title=d.title; renderTabs(); } }
+  }catch(e){
+    div.innerHTML = '<div class="bbar"><a class="act" href="'+esc(url)+'" target="_blank" rel="noopener">open original ↗</a></div>'+
+      '<div class="empty">Couldn’t open this page.</div>';
+  }
+}
+function browserView(d){
+  const bar = '<div class="bbar"><a class="act" href="'+esc(d.url)+'" target="_blank" rel="noopener">open original ↗</a></div>';
+  if(d.mode==='iframe') return bar+'<iframe class="bframe" src="'+esc(d.url)+'" referrerpolicy="no-referrer"></iframe>';
+  if(d.mode==='reader'){
+    const img = d.image ? '<img class="rimg" src="'+esc(d.image)+'" alt="" onerror="this.remove()">' : '';
+    const by  = d.byline ? '<div class="rby">'+esc(d.byline)+'</div>' : '';
+    return bar+'<article class="reader"><h1>'+esc(d.title)+'</h1>'+by+img+
+      '<div class="rbody">'+(d.html || '<p>(no readable content)</p>')+'</div></article>';
+  }
+  return bar+'<div class="empty">Couldn’t load this page.</div>';
+}
+document.addEventListener('DOMContentLoaded', ()=>{
+  document.getElementById('tabs').addEventListener('click', e=>{
+    const tab = e.target.closest('.tab'); if(!tab) return;
+    if(e.target.closest('.tclose')) closeTab(tab.dataset.url);
+    else setTab(tab.dataset.url);
+  });
+  document.getElementById('posts').addEventListener('click', e=>{
+    const link = e.target.closest('[data-open]');
+    if(link){ e.stopPropagation(); openTab(link.dataset.open, link.dataset.openTitle||''); return; }
+    const post = e.target.closest('.post');
+    if(post && post.dataset.url) openTab(post.dataset.url, post.dataset.title);
+  });
+});
 
 /* ----- live feed over WebSocket ----- */
 const items = new Map();
@@ -33,13 +120,13 @@ function postHTML(it){
   }
   const ctxt = (it.comments != null) ? 'comments ('+it.comments+')' : 'comments';
   const comments = it.comments_url
-    ? '<a class="act" href="'+esc(it.comments_url)+'" target="_blank" rel="noopener">'+ctxt+'</a>' : '';
-  return '<article class="post"><div class="src '+a.cls+'">'+esc(a.badge)+'</div><div class="body">'+
+    ? '<span class="act" data-open="'+esc(it.comments_url)+'" data-open-title="'+esc(it.source+' — comments')+'">'+ctxt+'</span>' : '';
+  return '<article class="post" data-url="'+esc(it.url)+'" data-title="'+esc(it.title)+'"><div class="src '+a.cls+'">'+esc(a.badge)+'</div><div class="body">'+
     '<div class="meta"><span class="name">'+esc(it.source)+'</span>'+
     '<span class="dot">·</span><span>'+relTime(it.published_at)+'</span>'+eng+'</div>'+
     '<div class="title">'+esc(it.title)+'</div>'+
     '<div class="excerpt">'+esc(it.excerpt)+'</div>'+ media +
-    '<div class="actions"><a class="act" href="'+esc(it.url)+'" target="_blank" rel="noopener">↗ open</a>'+ comments +
+    '<div class="actions">'+ comments +
     '<span class="score">score <b>'+(it.score||0).toFixed(2)+'</b>'+
     '<span class="meter"><i style="width:'+pct+'%"></i></span></span></div></div></article>';
 }

@@ -136,6 +136,11 @@ class SkroliViewer:
                     self._json({"sections": [
                         _section_form(viewer._config, s) for s in viewer._sections
                     ]})
+                elif self.path.startswith("/api/open?"):
+                    from urllib.parse import urlparse, parse_qs
+                    from . import reader
+                    url = (parse_qs(urlparse(self.path).query).get("url") or [""])[0]
+                    self._json(reader.open_url(url))
                 else:
                     self.send_response(404)
                     self.end_headers()
