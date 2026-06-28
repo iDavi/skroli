@@ -205,7 +205,7 @@ function renderFeed(){
   document.getElementById('count').textContent = arr.length + ' items';
   const counts = {};
   arr.forEach(it => counts[it.source] = (counts[it.source]||0)+1);
-  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const top = Object.entries(counts).sort((a,b)=>b[1]-a[1]);
   document.getElementById('sources').innerHTML = top.length
     ? top.map(([s,n])=>'<a class="srcrow"><span>'+esc(s)+'</span><span class="c">'+n+'</span></a>').join('')
     : '<div class="srcrow">none yet</div>';
@@ -358,19 +358,17 @@ def _ingestors_page(config: Config) -> str:
             <button class="addbtn" type="button" onclick="addSub()">+ add subreddit</button>
           </div>
         </div>
-        <div class="cols" style="margin-top:16px">
-          <div class="col"><h4>Letterboxd profiles</h4>
-            <div id="letterboxd">{lb}</div>
-            <button class="addbtn" type="button" onclick="addLb()">+ add profile</button>
-            <div class="erow" style="border:0;margin-top:10px;padding:0">
-              <span class="pre">@</span>
-              <input id="lb-import" placeholder="username to import following from">
-              <button class="x" type="button" style="width:auto;padding:0 10px;white-space:nowrap"
-                onclick="importFollowing(this)">import</button>
-            </div>
-            <span class="savemsg" id="lb-import-msg"></span>
+        <div style="margin-top:16px">
+          <h4 style="font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--stone);margin-bottom:8px">Letterboxd profiles</h4>
+          <div id="letterboxd">{lb}</div>
+          <button class="addbtn" type="button" onclick="addLb()">+ add profile</button>
+          <div class="erow" style="border:0;margin-top:10px;padding:0">
+            <span class="pre">@</span>
+            <input id="lb-import" placeholder="username to import everyone they follow">
+            <button class="x" type="button" style="width:auto;padding:0 12px;white-space:nowrap"
+              onclick="importFollowing(this)">import following</button>
           </div>
-          <div class="col"></div>
+          <span class="savemsg" id="lb-import-msg"></span>
         </div>
         <div class="saverow">
           <button class="savebtn" type="button" onclick="saveIngestors(this)">Save &amp; refresh</button>

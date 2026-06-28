@@ -8,6 +8,7 @@ can't stall the others. Standard library only.
 
 from __future__ import annotations
 
+import random
 import threading
 import time
 import urllib.error
@@ -40,7 +41,7 @@ class Fetcher:
                 lock = self._domain_locks[domain] = threading.Lock()
             return lock
 
-    def get(self, url: str, headers: dict | None = None) -> bytes:
+    def get(self, url: str, headers: dict | None = None, retries: int | None = None) -> bytes:
         domain = urlparse(url).netloc
         gap = self._gaps.get(domain, self.gap)
         # Hold the domain lock for the whole request so same-domain calls never
@@ -48,32 +49,33 @@ class Fetcher:
         with self._domain_lock(domain):
             last = self._last.get(domain)
             if last is not None:
-                wait = gap - (time.monotonic() - last)
+                # Jitter the gap so repeated cycles don't hit the same rhythm.
+                wait = gap + random.uniform(0, 0.5) - (time.monotonic() - last)
                 if wait > 0:
                     time.sleep(wait)
             try:
-                return self._request(url, headers)
+                return self._request(url, headers, self.retries if retries is None else retries)
             finally:
                 self._last[domain] = time.monotonic()
 
-    def _request(self, url: str, headers: dict | None) -> bytes:
+    def _request(self, url: str, headers: dict | None, retries: int) -> bytes:
         merged = {"User-Agent": USER_AGENT}
         if headers:
             merged.update(headers)
         req = urllib.request.Request(url, headers=merged)
-        for attempt in range(self.retries):
+        for attempt in range(retries):
             try:
                 with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
                     return resp.read()
             except urllib.error.HTTPError as exc:
-                if exc.code != 429 or attempt == self.retries - 1:
+                if exc.code != 429 or attempt == retries - 1:
                     raise
                 retry_after = exc.headers.get("Retry-After")
                 try:
                     wait = float(retry_after) if retry_after else 0.0
                 except ValueError:
                     wait = 0.0
-                wait = max(wait, 5.0 * (2 ** attempt))  # 5s, 10s, 20s…
+                wait = max(wait, 5.0 * (2 ** attempt)) + random.uniform(0, 1.0)  # 5s, 10s, 20s…
                 print(f"  · rate-limited (429), retrying in {wait:.0f}s…")
                 time.sleep(wait)
         raise RuntimeError("unreachable")
@@ -81,8 +83,8 @@ class Fetcher:
 
 # Process-wide shared instance so per-domain state is global across ingestors.
 SHARED = Fetcher()
-SHARED.set_domain_gap("www.reddit.com", 2.0)
+SHARED.set_domain_gap("www.reddit.com", 3.0)
 
 
-def fetch(url: str, headers: dict | None = None) -> bytes:
-    return SHARED.get(url, headers=headers)
+def fetch(url: str, headers: dict | None = None, retries: int | None = None) -> bytes:
+    return SHARED.get(url, headers=headers, retries=retries)

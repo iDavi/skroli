@@ -261,11 +261,12 @@ class RssIngestor:
         back to the public .rss feed (no votes) so the subreddit still shows up."""
         name = label.removeprefix("r/")
         try:
-            return self._parse_reddit(fetch(json_url), label, origin)
+            # Fail fast (no long 429 backoff) — fall straight back to RSS instead.
+            return self._parse_reddit(fetch(json_url, retries=1), label, origin)
         except urllib.error.HTTPError as exc:
             if exc.code not in (403, 429, 404):
                 raise
-            print(f"  · reddit JSON blocked for {label} ({exc.code}); using RSS (no votes)")
+            print(f"  · reddit JSON unavailable for {label} ({exc.code}); using RSS (no votes)")
             rss = fetch(f"https://www.reddit.com/r/{name}/.rss")
             return self._parse(rss, label, json_url, origin)
 
