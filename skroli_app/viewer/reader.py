@@ -94,7 +94,8 @@ class _Sanitizer(HTMLParser):
         a = dict(attrs)
         if tag == "a":
             href = urljoin(self.base, a.get("href", "")) if a.get("href") else ""
-            self.out.append(f'<a href="{_html.escape(href)}" target="_blank" rel="noopener">')
+            # No target=_blank — the app intercepts clicks and navigates in-tab.
+            self.out.append(f'<a href="{_html.escape(href)}">')
         elif tag == "img":
             src = a.get("src") or a.get("data-src") or ""
             src = urljoin(self.base, src) if src else ""
@@ -167,11 +168,10 @@ def _reddit(url: str) -> dict:
     }
 
 
-def open_url(url: str) -> dict:
-    """How the UI should open ``url``. Native/reader rendering is preferred; an
-    iframe is only used as a last resort for framable pages we can't extract."""
+def read_url(url: str) -> dict:
+    """Extract a clean reader view of ``url`` (Reddit via its JSON)."""
     if not url:
-        return {"mode": "error", "url": url, "error": "no url"}
+        return {"url": url, "title": "", "html": "<p>(no url)</p>"}
     host = urlparse(url).netloc.lower()
     if host.endswith("reddit.com") and "/comments/" in url:
         try:
@@ -179,20 +179,47 @@ def open_url(url: str) -> dict:
         except Exception:  # noqa: BLE001 - fall through to generic reader
             pass
     try:
-        raw, headers = _fetch(url)
-    except Exception as exc:  # noqa: BLE001 - surface fetch errors to the UI
-        return {"mode": "error", "url": url, "error": str(exc)}
+        raw, _ = _fetch(url)
+    except Exception as exc:  # noqa: BLE001
+        return {"url": url, "title": "", "html": f"<p>Couldn’t load this page ({_html.escape(str(exc))}).</p>"}
     text = raw.decode("utf-8", "replace")
-    body = _sanitize(_region(text), url)
-    # Reader by default; only iframe if extraction is basically empty AND the
-    # site permits framing (a JS app we can't read but can embed).
-    if len(body) < 600 and _frames_allowed(headers):
-        return {"mode": "iframe", "url": url}
     return {
-        "mode": "reader",
         "url": url,
         "title": _title(text),
         "byline": _meta(text, "author") or _meta(text, "article:author"),
         "image": _meta(text, "og:image"),
-        "html": body,
+        "html": _sanitize(_region(text), url) or "<p>(no readable content)</p>",
     }
+
+
+# Script injected into proxied pages so in-page link clicks navigate the skroli
+# tab (via postMessage to the parent) instead of the iframe wandering off to a
+# frame-blocked URL.
+_NAV_SHIM = (
+    '<script>(function(){document.addEventListener("click",function(e){'
+    'var a=e.target&&e.target.closest&&e.target.closest("a");if(!a||!a.href)return;'
+    'e.preventDefault();e.stopPropagation();'
+    'try{parent.postMessage({skroliNav:a.href},"*");}catch(_){}}, true);})();</script>'
+)
+
+
+def proxy(url: str) -> tuple[bytes, str]:
+    """Fetch ``url`` server-side and return it for same-origin embedding: frame
+    headers are dropped (we just don't resend them), a <base> makes subresources
+    load from the real site, and a shim routes link clicks back to the app.
+    Reddit is served via old.reddit.com, which is server-rendered (the new SPA
+    needs APIs we can't proxy)."""
+    target = url
+    if urlparse(url).netloc.lower().endswith("reddit.com"):
+        target = re.sub(r"^https?://[^/]+", "https://old.reddit.com", url, count=1)
+    raw, headers = _fetch(target)
+    ctype = headers.get("Content-Type", "text/html")
+    if "html" not in ctype.lower():
+        return raw, ctype  # images/css/etc. pass through untouched
+    text = raw.decode("utf-8", "replace")
+    inject = f'<base href="{_html.escape(target)}">' + _NAV_SHIM
+    if re.search(r"<head[^>]*>", text, re.I):
+        text = re.sub(r"<head[^>]*>", lambda m: m.group(0) + inject, text, count=1, flags=re.I)
+    else:
+        text = inject + text
+    return text.encode("utf-8"), "text/html; charset=utf-8"

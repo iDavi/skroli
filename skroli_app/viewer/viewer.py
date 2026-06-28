@@ -136,11 +136,21 @@ class SkroliViewer:
                     self._json({"sections": [
                         _section_form(viewer._config, s) for s in viewer._sections
                     ]})
-                elif self.path.startswith("/api/open?"):
+                elif self.path.startswith("/api/read?"):
                     from urllib.parse import urlparse, parse_qs
                     from . import reader
                     url = (parse_qs(urlparse(self.path).query).get("url") or [""])[0]
-                    self._json(reader.open_url(url))
+                    self._json(reader.read_url(url))
+                elif self.path.startswith("/proxy?"):
+                    from urllib.parse import urlparse, parse_qs
+                    from . import reader
+                    url = (parse_qs(urlparse(self.path).query).get("url") or [""])[0]
+                    try:
+                        body, ctype = reader.proxy(url)
+                    except Exception:  # noqa: BLE001
+                        body = b"<p style='color:#ccc;font-family:sans-serif;padding:24px'>Couldn't load this page.</p>"
+                        ctype = "text/html; charset=utf-8"
+                    self._send(body, ctype)
                 else:
                     self.send_response(404)
                     self.end_headers()

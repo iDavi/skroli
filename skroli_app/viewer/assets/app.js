@@ -46,7 +46,7 @@ function openPage(url, title){
   if (!url) return;
   const key = 'page:' + url;
   if (!tabs.find(t => t.key === key)){
-    tabs.push({ key, kind: 'page', title: title || url, url });
+    tabs.push({ key, kind: 'page', title: title || url, url, mode: 'live' });
     const div = document.createElement('div');
     div.className = 'tabview'; div.dataset.key = key;
     div.innerHTML = '<div class="empty">Opening…</div>';
@@ -99,27 +99,41 @@ function renderTabs(){
   h += '<div class="tabadd" id="tabadd" title="New feed tab">+</div>';
   document.getElementById('tabs').innerHTML = h;
 }
-async function loadPage(key, url, div){
-  try{
-    const d = await (await fetch('/api/open?url=' + encodeURIComponent(url))).json();
-    div.innerHTML = browserView(d);
-    if (d.mode === 'reader' && d.title){ const t = tabs.find(x => x.key === key); if (t){ t.title = d.title; renderTabs(); } }
-  }catch(e){
-    div.innerHTML = '<div class="bbar"><a class="act" href="' + esc(url) + '" target="_blank" rel="noopener">open original ↗</a></div>' +
-      '<div class="empty">Couldn’t open this page.</div>';
+function bbar(key, url, mode){
+  const toggle = mode === 'live' ? 'reader view' : 'live view';
+  const next = mode === 'live' ? 'reader' : 'live';
+  return '<div class="bbar">' +
+    '<a class="act" href="' + esc(url) + '" target="_blank" rel="noopener">open original ↗</a>' +
+    '<button class="act modebtn" data-key="' + esc(key) + '" data-mode="' + next + '">' + toggle + '</button>' +
+    '</div>';
+}
+function loadPage(key, url, div){
+  const tab = tabs.find(t => t.key === key);
+  const mode = tab ? (tab.mode || 'live') : 'live';
+  if (mode === 'live'){
+    // Live page via the same-origin proxy (loads sites that block framing).
+    div.innerHTML = bbar(key, url, mode) +
+      '<div class="bcontent"><iframe class="bframe" sandbox="allow-scripts allow-forms allow-popups" ' +
+      'src="/proxy?url=' + encodeURIComponent(url) + '"></iframe></div>';
+  } else {
+    div.innerHTML = bbar(key, url, mode) + '<div class="bcontent"><div class="empty">Loading…</div></div>';
+    fetch('/api/read?url=' + encodeURIComponent(url)).then(r => r.json()).then(d => {
+      const img = d.image ? '<img class="rimg" src="' + esc(d.image) + '" alt="" onerror="this.remove()">' : '';
+      const by  = d.byline ? '<div class="rby">' + esc(d.byline) + '</div>' : '';
+      div.querySelector('.bcontent').innerHTML =
+        '<article class="reader"><h1>' + esc(d.title || '') + '</h1>' + by + img +
+        '<div class="rbody">' + (d.html || '<p>(no readable content)</p>') + '</div></article>';
+      if (d.title && tab){ tab.title = d.title; renderTabs(); }
+    }).catch(()=>{ div.querySelector('.bcontent').innerHTML = '<div class="empty">Couldn’t load this page.</div>'; });
   }
 }
-function browserView(d){
-  const bar = '<div class="bbar"><a class="act" href="' + esc(d.url) + '" target="_blank" rel="noopener">open original ↗</a></div>';
-  if (d.mode === 'iframe') return bar + '<iframe class="bframe" src="' + esc(d.url) + '" referrerpolicy="no-referrer"></iframe>';
-  if (d.mode === 'reader'){
-    const img = d.image ? '<img class="rimg" src="' + esc(d.image) + '" alt="" onerror="this.remove()">' : '';
-    const by  = d.byline ? '<div class="rby">' + esc(d.byline) + '</div>' : '';
-    return bar + '<article class="reader"><h1>' + esc(d.title) + '</h1>' + by + img +
-      '<div class="rbody">' + (d.html || '<p>(no readable content)</p>') + '</div></article>';
-  }
-  return bar + '<div class="empty">Couldn’t load this page.</div>';
+function reloadTab(key){
+  const tab = tabs.find(t => t.key === key);
+  const div = document.querySelector('#browser .tabview[data-key="' + CSS.escape(key) + '"]');
+  if (tab && div) loadPage(key, tab.url, div);
 }
+function setMode(key, mode){ const t = tabs.find(x => x.key === key); if (t){ t.mode = mode; reloadTab(key); } }
+function navigateTab(key, url){ const t = tabs.find(x => x.key === key); if (t){ t.url = url; t.title = url; reloadTab(key); renderTabs(); } }
 let _dragKey = null;
 document.addEventListener('DOMContentLoaded', ()=>{
   newFeed();                       // the app opens with one feed tab
@@ -144,6 +158,27 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if (link){ e.stopPropagation(); openPage(link.dataset.open, link.dataset.openTitle || ''); return; }
     const post = e.target.closest('.post');
     if (post && post.dataset.url) openPage(post.dataset.url, post.dataset.title);
+  });
+  // Browser pane: reader-link clicks and the live/reader toggle stay in-app.
+  document.getElementById('browser').addEventListener('click', e => {
+    const mb = e.target.closest('.modebtn');
+    if (mb){ setMode(mb.dataset.key, mb.dataset.mode); return; }
+    const a = e.target.closest('.bcontent a');
+    if (a && a.getAttribute('href')){
+      e.preventDefault();
+      const tv = a.closest('.tabview');
+      if (tv) navigateTab(tv.dataset.key, a.href);
+    }
+  });
+  // Links clicked inside a proxied (live) page post back here to navigate in-tab.
+  window.addEventListener('message', e => {
+    const nav = e.data && e.data.skroliNav;
+    if (!nav) return;
+    let key = null;
+    document.querySelectorAll('#browser .tabview iframe').forEach(f => {
+      if (f.contentWindow === e.source){ const tv = f.closest('.tabview'); if (tv) key = tv.dataset.key; }
+    });
+    if (key) navigateTab(key, nav);
   });
 });
 
