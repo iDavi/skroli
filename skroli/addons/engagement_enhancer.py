@@ -29,6 +29,8 @@ class EngagementEnhancer:
         self._config = config
 
     def enhance(self, items: list[Item]) -> list[Item]:
+        if not self._config.enabled:
+            return items
         weight = max(0.0, min(self._config.weight, 1.0))
         if weight == 0.0:
             return items

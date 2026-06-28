@@ -91,6 +91,13 @@ a{color:inherit;text-decoration:none}
 .card .ctitle{font-size:20px;display:flex;align-items:center;gap:10px}
 .card .pill{font-size:11px;color:var(--stone);border:1px solid var(--olive-line);
  padding:2px 8px;text-transform:uppercase;letter-spacing:.5px}
+.toggle{margin-left:auto;display:inline-flex;align-items:center;gap:8px;font-size:11px;
+ text-transform:uppercase;letter-spacing:.5px;color:var(--stone);cursor:pointer}
+.toggle input{appearance:none;-webkit-appearance:none;width:34px;height:18px;flex:0 0 34px;
+ background:var(--olive-line);border:1px solid var(--olive-line);position:relative;cursor:pointer}
+.toggle input:checked{background:var(--gold)}
+.toggle input::after{content:"";position:absolute;top:1px;left:1px;width:14px;height:14px;background:var(--olive)}
+.toggle input:checked::after{left:18px}
 .card .desc{color:var(--stone);font-size:14px;margin:6px 0 16px;line-height:1.5}
 .cols{display:flex;gap:26px}
 .col{flex:1;min-width:0}
@@ -288,12 +295,14 @@ async function _save(url, body, msgId, btn){
   location.reload();
 }
 function saveIngestors(btn){
-  _save('/api/ingestors', {feeds:_vals('#feeds input'), subreddits:_vals('#subs input'),
+  _save('/api/ingestors', {enabled:document.getElementById('rss-enabled').checked,
+    feeds:_vals('#feeds input'), subreddits:_vals('#subs input'),
     letterboxd:_vals('#letterboxd input')}, 'ing-msg', btn);
 }
 function saveHackernews(btn){
   const c = parseInt(document.getElementById('hncount').value);
-  _save('/api/hackernews', {count:(isNaN(c)?0:c)}, 'hn-msg', btn);
+  _save('/api/hackernews', {enabled:document.getElementById('hn-enabled').checked,
+    count:(isNaN(c)?0:c)}, 'hn-msg', btn);
 }
 function saveEnhancers(btn){
   const weights = {};
@@ -303,12 +312,14 @@ function saveEnhancers(btn){
     if(n && !isNaN(v)) weights[n] = v;
   });
   const hl = parseFloat(document.getElementById('halflife').value);
-  _save('/api/enhancers', {half_life_hours:(isNaN(hl)?12:hl), weights}, 'enh-msg', btn);
+  _save('/api/enhancers', {enabled:document.getElementById('score-enabled').checked,
+    half_life_hours:(isNaN(hl)?12:hl), weights}, 'enh-msg', btn);
 }
 function saveEngagement(btn){
   const w = parseFloat(document.getElementById('engweight').value);
   const c = parseInt(document.getElementById('engcap').value);
-  _save('/api/engagement', {weight:(isNaN(w)?0:w), cap:(isNaN(c)?2000:c)}, 'eng2-msg', btn);
+  _save('/api/engagement', {enabled:document.getElementById('eng-enabled').checked,
+    weight:(isNaN(w)?0:w), cap:(isNaN(c)?2000:c)}, 'eng2-msg', btn);
 }
 """
 
@@ -337,6 +348,12 @@ def _lb_row(name: str = "") -> str:
             f'<button class="x" type="button" onclick="rm(this)">×</button></div>')
 
 
+def _toggle(el_id: str, enabled: bool) -> str:
+    chk = " checked" if enabled else ""
+    return (f'<label class="toggle"><span>enabled</span>'
+            f'<input type="checkbox" id="{el_id}"{chk}></label>')
+
+
 def _ingestors_page(config: Config) -> str:
     rss = config.rss
     feeds = "".join(_feed_row(u) for u in rss.feeds)
@@ -346,7 +363,7 @@ def _ingestors_page(config: Config) -> str:
     <div class="head"><h1>Ingestors</h1></div>
     <div class="page">
       <div class="card">
-        <div class="ctitle">RSS <span class="pill">built-in · always on</span></div>
+        <div class="ctitle">RSS <span class="pill">built-in</span>{_toggle("rss-enabled", config.rss.enabled)}</div>
         <div class="desc">Reads any RSS or Atom feed, subreddits (via Reddit's API,
           with upvotes), and Letterboxd profiles (film reviews).</div>
         <div class="cols">
@@ -378,7 +395,7 @@ def _ingestors_page(config: Config) -> str:
       </div>
 
       <div class="card">
-        <div class="ctitle">Hacker News <span class="pill">built-in</span></div>
+        <div class="ctitle">Hacker News <span class="pill">built-in</span>{_toggle("hn-enabled", config.hn.enabled)}</div>
         <div class="desc">Pulls the live front page from the official HN API, with
           points and comment counts the engagement enhancer can rank by.</div>
         <div class="cols">
@@ -404,7 +421,7 @@ def _enhancers_page(config: Config) -> str:
     <div class="head"><h1>Enhancers</h1></div>
     <div class="page">
       <div class="card">
-        <div class="ctitle">Score <span class="pill">built-in</span></div>
+        <div class="ctitle">Score <span class="pill">built-in</span>{_toggle("score-enabled", config.score.enabled)}</div>
         <div class="desc">Ranks the feed by recency. Each item scores
           <code>0.5 ^ (age / half-life)</code> times its source weight.</div>
         <div class="cols">
@@ -425,7 +442,7 @@ def _enhancers_page(config: Config) -> str:
       </div>
 
       <div class="card">
-        <div class="ctitle">Engagement <span class="pill">built-in</span></div>
+        <div class="ctitle">Engagement <span class="pill">built-in</span>{_toggle("eng-enabled", config.engagement.enabled)}</div>
         <div class="desc">Blends community votes (Reddit upvotes, HN points) into the
           score: <code>(1−weight)·recency + weight·votes</code>. Items without votes
           (plain RSS, Letterboxd) keep their recency score.</div>
@@ -587,6 +604,7 @@ class SkroliViewer:
                 elif self.path == "/api/ingestors":
                     data = self._read_json()
                     rss = viewer._config.rss
+                    rss.enabled = bool(data.get("enabled", True))
                     rss.feeds = [str(x) for x in data.get("feeds", []) if str(x).strip()]
                     rss.subreddits = [
                         str(x).strip() for x in data.get("subreddits", []) if str(x).strip()
@@ -609,6 +627,7 @@ class SkroliViewer:
                     self.wfile.write(body)
                 elif self.path == "/api/hackernews":
                     data = self._read_json()
+                    viewer._config.hn.enabled = bool(data.get("enabled", True))
                     try:
                         viewer._config.hn.count = max(int(data.get("count", 30)), 0)
                     except (ValueError, TypeError):
@@ -619,6 +638,7 @@ class SkroliViewer:
                 elif self.path == "/api/enhancers":
                     data = self._read_json()
                     score = viewer._config.score
+                    score.enabled = bool(data.get("enabled", True))
                     try:
                         score.half_life_hours = max(float(data.get("half_life_hours", 12)), 0.1)
                     except (ValueError, TypeError):
@@ -636,6 +656,7 @@ class SkroliViewer:
                 elif self.path == "/api/engagement":
                     data = self._read_json()
                     eng = viewer._config.engagement
+                    eng.enabled = bool(data.get("enabled", True))
                     try:
                         eng.weight = min(max(float(data.get("weight", 0.4)), 0.0), 1.0)
                     except (ValueError, TypeError):

@@ -23,6 +23,7 @@ class RuntimeConfig:
 
 @dataclass
 class RssConfig:
+    enabled: bool = True
     feeds: list[str] = field(default_factory=list)
     subreddits: list[str] = field(default_factory=list)
     letterboxd: list[str] = field(default_factory=list)  # usernames → film reviews
@@ -31,12 +32,14 @@ class RssConfig:
 @dataclass
 class HnConfig:
     # Hacker News via the official Algolia API (real points + comment counts).
-    count: int = 30  # how many front-page stories to pull (0 = disabled)
+    enabled: bool = True
+    count: int = 30  # how many front-page stories to pull
 
 
 @dataclass
 class ScoreConfig:
     # Half-life (hours) for recency decay and optional per-source weights.
+    enabled: bool = True
     half_life_hours: float = 12.0
     weights: dict[str, float] = field(default_factory=dict)
 
@@ -46,6 +49,7 @@ class EngagementConfig:
     # Blend community engagement (Reddit upvotes, HN points) into the score.
     # final = (1 - weight)·recency + weight·engagement, engagement log-normalised
     # against ``cap`` votes. weight 0 = ignore engagement entirely.
+    enabled: bool = True
     weight: float = 0.4
     cap: int = 2000
 
@@ -101,14 +105,17 @@ def save_config(config: Config) -> Path:
         f"open_window = {'true' if rt.open_window else 'false'}",
         "",
         "[ingestors.rss]",
+        f"enabled = {'true' if config.rss.enabled else 'false'}",
         f"feeds = {_toml_array(config.rss.feeds)}",
         f"subreddits = {_toml_array(config.rss.subreddits)}",
         f"letterboxd = {_toml_array(config.rss.letterboxd)}",
         "",
         "[ingestors.hackernews]",
+        f"enabled = {'true' if config.hn.enabled else 'false'}",
         f"count = {config.hn.count}",
         "",
         "[enhancers.score]",
+        f"enabled = {'true' if config.score.enabled else 'false'}",
         f"half_life_hours = {_toml_num(config.score.half_life_hours)}",
     ]
     if config.score.weights:
@@ -117,6 +124,7 @@ def save_config(config: Config) -> Path:
     lines += [
         "",
         "[enhancers.engagement]",
+        f"enabled = {'true' if config.engagement.enabled else 'false'}",
         f"weight = {_toml_num(config.engagement.weight)}",
         f"cap = {config.engagement.cap}",
     ]
@@ -148,21 +156,24 @@ def load_config(path: str | Path | None = None) -> Config:
         ingestors = raw.get("ingestors", {})
         rss = ingestors.get("rss", {})
         cfg.rss = RssConfig(
+            enabled=bool(rss.get("enabled", True)),
             feeds=list(rss.get("feeds", [])),
             subreddits=list(rss.get("subreddits", [])),
             letterboxd=list(rss.get("letterboxd", [])),
         )
         hn = ingestors.get("hackernews", {})
-        cfg.hn = HnConfig(count=int(hn.get("count", 30)))
+        cfg.hn = HnConfig(enabled=bool(hn.get("enabled", True)), count=int(hn.get("count", 30)))
 
         enhancers = raw.get("enhancers", {})
         sc = enhancers.get("score", {})
         cfg.score = ScoreConfig(
+            enabled=bool(sc.get("enabled", True)),
             half_life_hours=float(sc.get("half_life_hours", 12.0)),
             weights={str(k): float(v) for k, v in sc.get("weights", {}).items()},
         )
         eng = enhancers.get("engagement", {})
         cfg.engagement = EngagementConfig(
+            enabled=bool(eng.get("enabled", True)),
             weight=float(eng.get("weight", 0.4)),
             cap=int(eng.get("cap", 2000)),
         )

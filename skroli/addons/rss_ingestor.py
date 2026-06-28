@@ -271,6 +271,8 @@ class RssIngestor:
             return self._parse(rss, label, json_url, origin)
 
     def fetch(self) -> list[Item]:
+        if not self._config.enabled:
+            return []
         items: list[Item] = []
         for kind, label, url, origin in self._sources():
             try:

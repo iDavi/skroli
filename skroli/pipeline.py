@@ -97,10 +97,12 @@ class Engine:
         """The set of source origins the current config still includes. Must
         match the ``meta['origin']`` values the ingestors stamp on items."""
         c = self.config
-        origins = set(c.rss.feeds)
-        origins |= {f"reddit:{s.removeprefix('r/').strip('/')}" for s in c.rss.subreddits}
-        origins |= {f"letterboxd:{u.strip().lstrip('@').strip('/')}" for u in c.rss.letterboxd}
-        if c.hn.count > 0:
+        origins: set[str] = set()
+        if c.rss.enabled:
+            origins |= set(c.rss.feeds)
+            origins |= {f"reddit:{s.removeprefix('r/').strip('/')}" for s in c.rss.subreddits}
+            origins |= {f"letterboxd:{u.strip().lstrip('@').strip('/')}" for u in c.rss.letterboxd}
+        if c.hn.enabled and c.hn.count > 0:
             origins.add("hn")
         return origins
 

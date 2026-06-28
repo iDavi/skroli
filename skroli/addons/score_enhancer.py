@@ -18,6 +18,8 @@ class ScoreEnhancer:
         self._config = config
 
     def enhance(self, items: list[Item]) -> list[Item]:
+        if not self._config.enabled:
+            return items
         now = utcnow()
         half_life = max(self._config.half_life_hours, 0.1)
         for it in items:

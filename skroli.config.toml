@@ -9,8 +9,9 @@ retention_hours = 48         # drop items older than this (saved items are kept)
 port = 4242                  # the local viewer is served here
 open_window = false          # true = native window (needs `pip install skroli[desktop]`)
 
-# The built-in RSS ingestor. It can't be removed; configure its sources here.
+# The built-in RSS ingestor. Toggle it on/off with `enabled`.
 [ingestors.rss]
+enabled = true
 feeds = [
   "https://www.theverge.com/rss/index.xml",
 ]
@@ -21,10 +22,12 @@ letterboxd = []
 
 # Hacker News via the official API (real points + comment counts).
 [ingestors.hackernews]
-count = 30                   # front-page stories to fetch (0 disables HN)
+enabled = true
+count = 30                   # front-page stories to fetch
 
 # The built-in scoring enhancer: recency decay × per-source weight.
 [enhancers.score]
+enabled = true
 half_life_hours = 12.0
 # Optional: nudge specific sources up or down (matched on their feed title).
 # [enhancers.score.weights]
@@ -32,5 +35,6 @@ half_life_hours = 12.0
 
 # The built-in engagement enhancer: blends votes/points into the score.
 [enhancers.engagement]
+enabled = true
 weight = 0.4                 # 0 = ignore votes, 1 = rank almost purely by votes
 cap = 2000                   # votes/points that count as a "full" engagement score

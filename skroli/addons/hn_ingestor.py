@@ -30,7 +30,7 @@ class HackerNewsIngestor:
         self._config = config
 
     def fetch(self) -> list[Item]:
-        if self._config.count <= 0:
+        if not self._config.enabled or self._config.count <= 0:
             return []
         payload = json.loads(fetch(API + str(self._config.count)))
 
