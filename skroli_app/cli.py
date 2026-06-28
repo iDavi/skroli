@@ -13,7 +13,7 @@ from .ingestors.hackernews.ingestor import HackerNewsIngestor
 from .enhancers.score.enhancer import ScoreEnhancer
 from .enhancers.engagement.enhancer import EngagementEnhancer
 from .viewer.viewer import SkroliViewer
-from .core.config import load_config, save_config
+from .core.config import load_config, save_config, SECTIONS
 from .core.pipeline import Engine
 from .core.storage import Storage
 from .core.stream import Broadcaster
@@ -32,6 +32,12 @@ def _build(config) -> tuple[Engine, SkroliViewer]:
         save_config(config)
         engine.refresh()
 
+    # Named actions the UI can invoke generically (kept here, not in the viewer).
+    from .ingestors.rss.ingestor import letterboxd_following
+    actions = {
+        "import-following": lambda p: {"users": letterboxd_following(str(p.get("username", "")))},
+    }
+
     viewer = SkroliViewer(
         port=config.runtime.port,
         broadcaster=broadcaster,
@@ -39,6 +45,8 @@ def _build(config) -> tuple[Engine, SkroliViewer]:
         on_refresh=engine.refresh,       # refresh button streams fresh items
         on_save=on_save,
         config=config,
+        sections=SECTIONS,
+        actions=actions,
     )
     return engine, viewer
 

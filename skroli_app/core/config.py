@@ -10,10 +10,24 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..enhancers.engagement.config import EngagementConfig
-from ..enhancers.score.config import ScoreConfig
-from ..ingestors.hackernews.config import HnConfig
-from ..ingestors.rss.config import RssConfig
+from ..enhancers.engagement import config as engagement_config
+from ..enhancers.score import config as score_config
+from ..ingestors.hackernews import config as hackernews_config
+from ..ingestors.rss import config as rss_config
+
+EngagementConfig = engagement_config.EngagementConfig
+ScoreConfig = score_config.ScoreConfig
+HnConfig = hackernews_config.HnConfig
+RssConfig = rss_config.RssConfig
+
+# The configurable addons, in display order. The viewer renders/saves these
+# generically — it never references a specific addon.
+SECTIONS = [
+    rss_config.SECTION,
+    hackernews_config.SECTION,
+    score_config.SECTION,
+    engagement_config.SECTION,
+]
 
 DEFAULT_CONFIG_NAME = "skroli.config.toml"
 

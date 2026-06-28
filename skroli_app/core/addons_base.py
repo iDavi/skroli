@@ -6,9 +6,38 @@ third-party addons from the store is a later milestone.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field as dfield
 from typing import Protocol, runtime_checkable
 
 from .models import Item
+
+
+# --- declarative config schema -------------------------------------------------
+# Addons describe their config as data so the viewer can render and save any
+# addon's settings without knowing what it is.
+
+@dataclass
+class Field:
+    key: str
+    kind: str                       # toggle | int | float | list | weights
+    label: str = ""
+    placeholder: str = ""
+    prefix: str = ""                # shown before list inputs, e.g. "r/" or "@"
+    action: str = ""                # optional client action id (e.g. import-following)
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+
+
+@dataclass
+class Section:
+    """One configurable addon, as the UI sees it."""
+    id: str
+    group: str                      # "ingestor" | "enhancer"
+    title: str
+    attr: str                       # attribute on Config holding this addon's dataclass
+    desc: str = ""
+    fields: list[Field] = dfield(default_factory=list)
 
 
 @runtime_checkable

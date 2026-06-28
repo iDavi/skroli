@@ -1,9 +1,10 @@
 """Built-in skroli viewer (SPECS §3.3, §13).
 
-A thin server: it serves the static UI (``assets/index.html`` + ``app.css`` +
-``app.js``), exposes the config as JSON, streams feed items over a WebSocket, and
-accepts config edits. No HTML/CSS/JS lives here — the browser renders everything
-(feed and config forms) from data. Opens a native window via pywebview when
+A thin, addon-agnostic server. It serves the static UI (``assets/index.html`` +
+``app.css`` + ``app.js``), exposes the config as a generic list of sections
+(each addon describes its own fields), streams feed items over a WebSocket, and
+applies config edits + named actions back to the addons. It never references a
+specific ingestor or enhancer. Opens a native window via pywebview when
 available (extra: ``skroli[desktop]``), otherwise prints a URL to open.
 """
 
@@ -11,11 +12,12 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
 
-from ..core.config import Config
+from ..core.addons_base import Section
 from ..core import stream
 
 _ASSETS = Path(__file__).parent / "assets"
@@ -25,28 +27,58 @@ def _asset(name: str) -> bytes:
     return (_ASSETS / name).read_bytes()
 
 
-def config_to_dict(c: Config) -> dict:
-    """The config as the browser consumes it (to render the Ingestors/Enhancers
-    forms client-side)."""
+def _section_form(config, section: Section) -> dict:
+    target = getattr(config, section.attr)
     return {
-        "rss": {
-            "enabled": c.rss.enabled,
-            "feeds": c.rss.feeds,
-            "subreddits": c.rss.subreddits,
-            "letterboxd": c.rss.letterboxd,
-        },
-        "hackernews": {"enabled": c.hn.enabled, "count": c.hn.count},
-        "score": {
-            "enabled": c.score.enabled,
-            "half_life_hours": c.score.half_life_hours,
-            "weights": c.score.weights,
-        },
-        "engagement": {
-            "enabled": c.engagement.enabled,
-            "weight": c.engagement.weight,
-            "cap": c.engagement.cap,
-        },
+        "id": section.id,
+        "group": section.group,
+        "title": section.title,
+        "desc": section.desc,
+        "fields": [asdict(f) for f in section.fields],
+        "values": {f.key: getattr(target, f.key) for f in section.fields},
     }
+
+
+def _apply_values(config, section: Section, values: dict) -> None:
+    """Write submitted form values back onto the addon's config dataclass,
+    coercing by each field's declared kind."""
+    target = getattr(config, section.attr)
+    for f in section.fields:
+        if f.key not in values:
+            continue
+        v = values[f.key]
+        try:
+            if f.kind == "toggle":
+                setattr(target, f.key, bool(v))
+            elif f.kind == "int":
+                n = int(v)
+                setattr(target, f.key, max(n, int(f.min)) if f.min is not None else n)
+            elif f.kind == "float":
+                n = float(v)
+                if f.min is not None:
+                    n = max(n, f.min)
+                if f.max is not None:
+                    n = min(n, f.max)
+                setattr(target, f.key, n)
+            elif f.kind == "list":
+                out = []
+                for x in v or []:
+                    s = str(x).strip()
+                    if f.prefix and s.startswith(f.prefix):
+                        s = s[len(f.prefix):]
+                    if s:
+                        out.append(s)
+                setattr(target, f.key, out)
+            elif f.kind == "weights":
+                w: dict[str, float] = {}
+                for k, val in (v or {}).items():
+                    try:
+                        w[str(k)] = float(val)
+                    except (ValueError, TypeError):
+                        continue
+                setattr(target, f.key, w)
+        except (ValueError, TypeError):
+            continue
 
 
 class SkroliViewer:
@@ -59,14 +91,18 @@ class SkroliViewer:
         on_connect: Callable[[stream.Client], None] | None = None,
         on_refresh: Callable[[], None] | None = None,
         on_save: Callable[[], None] | None = None,
-        config: Config | None = None,
+        config=None,
+        sections: list[Section] | None = None,
+        actions: dict[str, Callable[[dict], dict]] | None = None,
     ):
         self.port = port
         self._broadcaster = broadcaster or stream.Broadcaster()
         self._on_connect = on_connect
         self._on_refresh = on_refresh
         self._on_save = on_save
-        self._config = config or Config()
+        self._config = config
+        self._sections = sections or []
+        self._actions = actions or {}
         self._httpd: ThreadingHTTPServer | None = None
 
     def serve(self, open_window: bool = False) -> None:
@@ -83,7 +119,7 @@ class SkroliViewer:
                 self.end_headers()
                 self.wfile.write(body)
 
-            def _json(self, payload: dict, status: int = 200):
+            def _json(self, payload, status: int = 200):
                 self._send(json.dumps(payload).encode(), "application/json", status)
 
             # ---- GET: static assets, config, websocket --------------------
@@ -97,7 +133,9 @@ class SkroliViewer:
                 elif self.path == "/app.js":
                     self._send(_asset("app.js"), "application/javascript; charset=utf-8")
                 elif self.path == "/api/config":
-                    self._json(config_to_dict(viewer._config))
+                    self._json({"sections": [
+                        _section_form(viewer._config, s) for s in viewer._sections
+                    ]})
                 else:
                     self.send_response(404)
                     self.end_headers()
@@ -131,7 +169,7 @@ class SkroliViewer:
                 finally:
                     viewer._broadcaster.remove(client)
 
-            # ---- POST: refresh + config edits -----------------------------
+            # ---- POST: refresh, generic save, generic actions -------------
             def _read_json(self) -> dict:
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 raw = self.rfile.read(length) if length else b""
@@ -145,67 +183,28 @@ class SkroliViewer:
                     if viewer._on_refresh:
                         viewer._on_refresh()
                     self._json({"ok": True})
-                elif self.path == "/api/ingestors":
+                elif self.path == "/api/save":
                     data = self._read_json()
-                    rss = viewer._config.rss
-                    rss.enabled = bool(data.get("enabled", True))
-                    rss.feeds = [str(x) for x in data.get("feeds", []) if str(x).strip()]
-                    rss.subreddits = [
-                        str(x).strip() for x in data.get("subreddits", []) if str(x).strip()
-                    ]
-                    rss.letterboxd = [
-                        str(x).strip().lstrip("@") for x in data.get("letterboxd", []) if str(x).strip()
-                    ]
-                    self._saved()
-                elif self.path == "/api/letterboxd-following":
-                    from ..ingestors.rss.ingestor import letterboxd_following
+                    section = next(
+                        (s for s in viewer._sections if s.id == data.get("id")), None
+                    )
+                    if section is None:
+                        self._json({"ok": False, "error": "unknown section"}, 404)
+                        return
+                    _apply_values(viewer._config, section, data.get("values") or {})
+                    if viewer._on_save:
+                        viewer._on_save()
+                    self._json({"ok": True})
+                elif self.path == "/api/action":
                     data = self._read_json()
-                    self._json({"users": letterboxd_following(str(data.get("username", "")))})
-                elif self.path == "/api/hackernews":
-                    data = self._read_json()
-                    viewer._config.hn.enabled = bool(data.get("enabled", True))
-                    try:
-                        viewer._config.hn.count = max(int(data.get("count", 30)), 0)
-                    except (ValueError, TypeError):
-                        pass
-                    self._saved()
-                elif self.path == "/api/enhancers":
-                    data = self._read_json()
-                    score = viewer._config.score
-                    score.enabled = bool(data.get("enabled", True))
-                    try:
-                        score.half_life_hours = max(float(data.get("half_life_hours", 12)), 0.1)
-                    except (ValueError, TypeError):
-                        pass
-                    weights: dict[str, float] = {}
-                    for k, v in (data.get("weights") or {}).items():
-                        try:
-                            weights[str(k)] = float(v)
-                        except (ValueError, TypeError):
-                            continue
-                    score.weights = weights
-                    self._saved()
-                elif self.path == "/api/engagement":
-                    data = self._read_json()
-                    eng = viewer._config.engagement
-                    eng.enabled = bool(data.get("enabled", True))
-                    try:
-                        eng.weight = min(max(float(data.get("weight", 0.4)), 0.0), 1.0)
-                    except (ValueError, TypeError):
-                        pass
-                    try:
-                        eng.cap = max(int(data.get("cap", 2000)), 1)
-                    except (ValueError, TypeError):
-                        pass
-                    self._saved()
+                    fn = viewer._actions.get(data.get("action"))
+                    if fn is None:
+                        self._json({"ok": False, "error": "unknown action"}, 404)
+                        return
+                    self._json(fn(data.get("payload") or {}))
                 else:
                     self.send_response(404)
                     self.end_headers()
-
-            def _saved(self):
-                if viewer._on_save:
-                    viewer._on_save()
-                self._json({"ok": True})
 
         self._httpd = ThreadingHTTPServer(("127.0.0.1", self.port), Handler)
         url = f"http://127.0.0.1:{self.port}"

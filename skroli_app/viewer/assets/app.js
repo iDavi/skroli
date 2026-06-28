@@ -100,135 +100,103 @@ function connect(){
 connect();
 function refresh(btn){ btn.classList.add('spin'); fetch('/api/refresh', {method:'POST'}); }
 
-/* ----- config editing ----- */
+/* ----- config forms (generic — rendered from /api/config sections) ----- */
+let sections = [];
+const X = '<button class="x" type="button" onclick="rm(this)">×</button>';
 function rm(btn){ btn.closest('.erow').remove(); }
 function _append(id, frag){
   const w = document.getElementById(id);
   w.insertAdjacentHTML('beforeend', frag);
   const last = w.lastElementChild.querySelector('input'); if(last) last.focus();
 }
-// Row builders shared by the form renderer and the "+ add" buttons.
-const X = '<button class="x" type="button" onclick="rm(this)">×</button>';
-function feedRow(v){ return '<div class="erow"><input value="'+esc(v||'')+'" placeholder="https://example.com/feed.xml">'+X+'</div>'; }
-function subRow(v){ return '<div class="erow"><span class="pre">r/</span><input value="'+esc(v||'')+'" placeholder="subreddit">'+X+'</div>'; }
-function lbRow(v){ return '<div class="erow"><span class="pre">@</span><input value="'+esc(v||'')+'" placeholder="username">'+X+'</div>'; }
-function weightRow(n,v){ return '<div class="erow"><input class="wname" list="srclist" value="'+esc(n||'')+'" placeholder="pick or type a source">'+
-  '<input class="wval" type="number" step="0.1" value="'+esc(v==null?'':v)+'" placeholder="1.0">'+X+'</div>'; }
+function listId(sid,key){ return 'list_'+sid+'_'+key; }
+function listRow(prefix, value){
+  const pre = prefix ? '<span class="pre">'+esc(prefix)+'</span>' : '';
+  return '<div class="erow">'+pre+'<input value="'+esc(value||'')+'">'+X+'</div>';
+}
+function weightRow(name, val){
+  return '<div class="erow"><input class="wname" list="srclist" value="'+esc(name||'')+'" placeholder="pick or type a source">'+
+    '<input class="wval" type="number" step="0.1" value="'+esc(val==null?'':val)+'" placeholder="1.0">'+X+'</div>';
+}
 function toggleHTML(id,on){ return '<label class="toggle"><span>enabled</span><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'></label>'; }
-function addFeed(){ _append('feeds', feedRow()); }
-function addSub(){ _append('subs', subRow()); }
-function addWeight(){ _append('weights', weightRow()); }
-function addLb(value){ _append('letterboxd', lbRow(value)); }
-async function importFollowing(btn){
-  const u = document.getElementById('lb-import').value.trim().replace(/^@/,'');
-  const msg = document.getElementById('lb-import-msg');
-  if(!u){ if(msg) msg.textContent='enter a username first'; return; }
-  btn.disabled = true; if(msg) msg.textContent = 'importing…';
-  const res = await fetch('/api/letterboxd-following', {method:'POST',
-    headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:u})});
-  const data = await res.json();
-  const have = new Set(_vals('#letterboxd input').map(s=>s.toLowerCase()));
-  let added = 0;
-  (data.users||[]).forEach(name=>{ if(!have.has(name.toLowerCase())){ addLb(name); have.add(name.toLowerCase()); added++; } });
-  btn.disabled = false;
-  if(msg) msg.textContent = added ? ('added '+added+' — review, then Save & refresh') : 'no new profiles found';
-  document.getElementById('lb-import').value = '';
-}
-function _vals(sel){ return [...document.querySelectorAll(sel)].map(i=>i.value.trim()).filter(Boolean); }
-async function _save(url, body, msgId, btn){
-  btn.disabled = true; const msg = document.getElementById(msgId);
-  if(msg) msg.textContent = 'Saving…';
-  await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  location.reload();
-}
-function saveIngestors(btn){
-  _save('/api/ingestors', {enabled:document.getElementById('rss-enabled').checked,
-    feeds:_vals('#feeds input'), subreddits:_vals('#subs input'),
-    letterboxd:_vals('#letterboxd input')}, 'ing-msg', btn);
-}
-function saveHackernews(btn){
-  const c = parseInt(document.getElementById('hncount').value);
-  _save('/api/hackernews', {enabled:document.getElementById('hn-enabled').checked,
-    count:(isNaN(c)?0:c)}, 'hn-msg', btn);
-}
-function saveEnhancers(btn){
-  const weights = {};
-  document.querySelectorAll('#weights .erow').forEach(r=>{
-    const n = r.querySelector('.wname').value.trim();
-    const v = parseFloat(r.querySelector('.wval').value);
-    if(n && !isNaN(v)) weights[n] = v;
-  });
-  const hl = parseFloat(document.getElementById('halflife').value);
-  _save('/api/enhancers', {enabled:document.getElementById('score-enabled').checked,
-    half_life_hours:(isNaN(hl)?12:hl), weights}, 'enh-msg', btn);
-}
-function saveEngagement(btn){
-  const w = parseFloat(document.getElementById('engweight').value);
-  const c = parseInt(document.getElementById('engcap').value);
-  _save('/api/engagement', {enabled:document.getElementById('eng-enabled').checked,
-    weight:(isNaN(w)?0:w), cap:(isNaN(c)?2000:c)}, 'eng2-msg', btn);
-}
+function addRow(sid,key,prefix){ _append(listId(sid,key), listRow(prefix,'')); }
+function addWeight(sid,key){ _append(listId(sid,key), weightRow('','')); }
 
-/* ----- config forms (rendered from /api/config) ----- */
-const SUBH = 'style="font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--stone);margin-bottom:8px"';
-function card(inner){ return '<div class="card">'+inner+'</div>'; }
-function saverow(action, msgId){
-  return '<div class="saverow"><button class="savebtn" type="button" onclick="'+action+'(this)">Save &amp; refresh</button>'+
-         '<span class="savemsg" id="'+msgId+'"></span></div>';
+function fieldHTML(s, f){
+  const v = s.values[f.key];
+  if(f.kind==='int' || f.kind==='float'){
+    const a = (f.min!=null?' min="'+f.min+'"':'')+(f.max!=null?' max="'+f.max+'"':'')+(f.step!=null?' step="'+f.step+'"':'');
+    return '<div class="col"><h4>'+esc(f.label||f.key)+'</h4>'+
+      '<div class="kv"><span></span><input data-f="'+f.key+'" type="number"'+a+' value="'+esc(v)+'"></div></div>';
+  }
+  if(f.kind==='list'){
+    const rows = (v||[]).map(x=>listRow(f.prefix, x)).join('');
+    let imp = '';
+    if(f.action){
+      imp = '<div class="erow" style="border:0;margin-top:10px;padding:0">'+
+        (f.prefix?'<span class="pre">'+esc(f.prefix)+'</span>':'')+
+        '<input id="imp_'+s.id+'_'+f.key+'" placeholder="username to import everyone they follow">'+
+        '<button class="x" type="button" style="width:auto;padding:0 12px;white-space:nowrap" '+
+        "onclick=\"doAction('"+s.id+"','"+f.key+"','"+f.action+"',this)\">import following</button></div>"+
+        '<span class="savemsg" id="impmsg_'+s.id+'_'+f.key+'"></span>';
+    }
+    return '<div class="col"><h4>'+esc(f.label||f.key)+'</h4>'+
+      '<div id="'+listId(s.id,f.key)+'" data-list="'+f.key+'" data-prefix="'+esc(f.prefix||'')+'">'+rows+'</div>'+
+      '<button class="addbtn" type="button" onclick="addRow(\''+s.id+'\',\''+f.key+'\',\''+esc(f.prefix||'')+'\')">+ add</button>'+imp+'</div>';
+  }
+  if(f.kind==='weights'){
+    const rows = Object.entries(v||{}).map(([n,wv])=>weightRow(n,wv)).join('');
+    return '<div class="col"><h4>'+esc(f.label||f.key)+'</h4>'+
+      '<div id="'+listId(s.id,f.key)+'" data-weights="'+f.key+'">'+rows+'</div>'+
+      '<button class="addbtn" type="button" onclick="addWeight(\''+s.id+'\',\''+f.key+'\')">+ add weight</button></div>';
+  }
+  return '';
 }
-function renderIngestors(c){
-  const rss = c.rss, hn = c.hackernews;
-  const rssCard = card(
-    '<div class="ctitle">RSS <span class="pill">built-in</span>'+toggleHTML('rss-enabled',rss.enabled)+'</div>'+
-    '<div class="desc">Reads any RSS or Atom feed, subreddits (via Reddit\'s API, with upvotes), and Letterboxd profiles (film reviews).</div>'+
-    '<div class="cols">'+
-      '<div class="col"><h4>Feeds</h4><div id="feeds">'+rss.feeds.map(feedRow).join('')+'</div>'+
-        '<button class="addbtn" type="button" onclick="addFeed()">+ add feed</button></div>'+
-      '<div class="col"><h4>Subreddits</h4><div id="subs">'+rss.subreddits.map(s=>subRow(s.replace(/^r\//,''))).join('')+'</div>'+
-        '<button class="addbtn" type="button" onclick="addSub()">+ add subreddit</button></div>'+
-    '</div>'+
-    '<div style="margin-top:16px"><h4 '+SUBH+'>Letterboxd profiles</h4>'+
-      '<div id="letterboxd">'+rss.letterboxd.map(u=>lbRow(u.replace(/^@/,''))).join('')+'</div>'+
-      '<button class="addbtn" type="button" onclick="addLb()">+ add profile</button>'+
-      '<div class="erow" style="border:0;margin-top:10px;padding:0"><span class="pre">@</span>'+
-        '<input id="lb-import" placeholder="username to import everyone they follow">'+
-        '<button class="x" type="button" style="width:auto;padding:0 12px;white-space:nowrap" onclick="importFollowing(this)">import following</button></div>'+
-      '<span class="savemsg" id="lb-import-msg"></span></div>'+
-    saverow('saveIngestors','ing-msg'));
-  const hnCard = card(
-    '<div class="ctitle">Hacker News <span class="pill">built-in</span>'+toggleHTML('hn-enabled',hn.enabled)+'</div>'+
-    '<div class="desc">Pulls the live front page from the official HN API, with points and comment counts the engagement enhancer can rank by.</div>'+
-    '<div class="cols"><div class="col"><h4>Parameters</h4>'+
-      '<div class="kv"><span>Stories to fetch (0 = off)</span><input id="hncount" type="number" step="5" min="0" value="'+hn.count+'"></div>'+
-    '</div><div class="col"></div></div>'+
-    saverow('saveHackernews','hn-msg'));
-  document.getElementById('ingestors').innerHTML =
-    '<div class="head"><h1>Ingestors</h1></div><div class="page">'+rssCard+hnCard+'</div>';
+function cardHTML(s){
+  let title = '<div class="ctitle">'+esc(s.title)+' <span class="pill">built-in</span>';
+  const cols = [];
+  s.fields.forEach(f=>{
+    if(f.kind==='toggle'){ title += toggleHTML('en_'+s.id, !!s.values[f.key]); }
+    else { cols.push(fieldHTML(s,f)); }
+  });
+  title += '</div>';
+  return '<div class="card" data-id="'+s.id+'">'+title+
+    '<div class="desc">'+esc(s.desc)+'</div>'+
+    '<div class="cols">'+cols.join('')+'</div>'+
+    '<div class="saverow"><button class="savebtn" type="button" onclick="saveSection(this)">Save &amp; refresh</button>'+
+    '<span class="savemsg" id="msg_'+s.id+'"></span></div></div>';
 }
-function renderEnhancers(c){
-  const score = c.score, eng = c.engagement;
-  const weights = Object.entries(score.weights||{}).map(([n,v])=>weightRow(n,v)).join('');
-  const scoreCard = card(
-    '<div class="ctitle">Score <span class="pill">built-in</span>'+toggleHTML('score-enabled',score.enabled)+'</div>'+
-    '<div class="desc">Ranks the feed by recency. Each item scores <code>0.5 ^ (age / half-life)</code> times its source weight.</div>'+
-    '<div class="cols">'+
-      '<div class="col"><h4>Parameters</h4><div class="kv"><span>Half-life (hours)</span>'+
-        '<input id="halflife" type="number" step="0.5" min="0.1" value="'+score.half_life_hours+'"></div></div>'+
-      '<div class="col"><h4>Source weights</h4><div id="weights">'+weights+'</div>'+
-        '<button class="addbtn" type="button" onclick="addWeight()">+ add weight</button></div>'+
-    '</div>'+
-    saverow('saveEnhancers','enh-msg'));
-  const engCard = card(
-    '<div class="ctitle">Engagement <span class="pill">built-in</span>'+toggleHTML('eng-enabled',eng.enabled)+'</div>'+
-    '<div class="desc">Blends community votes (Reddit upvotes, HN points) into the score: <code>(1−weight)·recency + weight·votes</code>. Items without votes (plain RSS, Letterboxd) keep their recency score.</div>'+
-    '<div class="cols">'+
-      '<div class="col"><h4>Weight (0–1)</h4><div class="kv"><span>How much votes matter</span>'+
-        '<input id="engweight" type="number" step="0.05" min="0" max="1" value="'+eng.weight+'"></div></div>'+
-      '<div class="col"><h4>Cap</h4><div class="kv"><span>Votes for a full score</span>'+
-        '<input id="engcap" type="number" step="100" min="1" value="'+eng.cap+'"></div></div>'+
-    '</div>'+
-    saverow('saveEngagement','eng2-msg'));
-  document.getElementById('enhancers').innerHTML =
-    '<div class="head"><h1>Enhancers</h1></div><div class="page">'+scoreCard+engCard+'</div>';
+function renderConfig(){
+  const ing = sections.filter(s=>s.group==='ingestor').map(cardHTML).join('');
+  const enh = sections.filter(s=>s.group==='enhancer').map(cardHTML).join('');
+  document.getElementById('ingestors').innerHTML = '<div class="head"><h1>Ingestors</h1></div><div class="page">'+ing+'</div>';
+  document.getElementById('enhancers').innerHTML = '<div class="head"><h1>Enhancers</h1></div><div class="page">'+enh+'</div>';
 }
-fetch('/api/config').then(r=>r.json()).then(c=>{ renderIngestors(c); renderEnhancers(c); });
+function saveSection(btn){
+  const card = btn.closest('.card'); const id = card.dataset.id;
+  const s = sections.find(x=>x.id===id); const values = {};
+  s.fields.forEach(f=>{
+    if(f.kind==='toggle'){ values[f.key] = card.querySelector('#en_'+id).checked; }
+    else if(f.kind==='int' || f.kind==='float'){ const n = parseFloat(card.querySelector('[data-f="'+f.key+'"]').value); values[f.key] = isNaN(n)?0:n; }
+    else if(f.kind==='list'){ values[f.key] = [...card.querySelectorAll('[data-list="'+f.key+'"] input')].map(i=>i.value.trim()).filter(Boolean); }
+    else if(f.kind==='weights'){ const w={}; card.querySelectorAll('[data-weights="'+f.key+'"] .erow').forEach(r=>{ const n=r.querySelector('.wname').value.trim(); const vv=parseFloat(r.querySelector('.wval').value); if(n&&!isNaN(vv)) w[n]=vv; }); values[f.key]=w; }
+  });
+  const msg = document.getElementById('msg_'+id); if(msg) msg.textContent = 'Saving…';
+  btn.disabled = true;
+  fetch('/api/save', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id, values})}).then(()=>location.reload());
+}
+async function doAction(sid, key, action, btn){
+  const inp = document.getElementById('imp_'+sid+'_'+key); const u = inp.value.trim().replace(/^@/,'');
+  const msg = document.getElementById('impmsg_'+sid+'_'+key);
+  if(!u){ if(msg) msg.textContent='enter a username first'; return; }
+  btn.disabled = true; if(msg) msg.textContent='importing…';
+  const res = await fetch('/api/action', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action, payload:{username:u}})});
+  const data = await res.json();
+  const cont = document.getElementById(listId(sid,key)); const prefix = cont.dataset.prefix||'';
+  const have = new Set([...cont.querySelectorAll('input')].map(i=>i.value.trim().toLowerCase()));
+  let added = 0;
+  (data.users||[]).forEach(name=>{ if(!have.has(name.toLowerCase())){ cont.insertAdjacentHTML('beforeend', listRow(prefix,name)); have.add(name.toLowerCase()); added++; } });
+  btn.disabled = false; inp.value='';
+  if(msg) msg.textContent = added ? ('added '+added+' — review, then Save & refresh') : 'no new profiles found';
+}
+fetch('/api/config').then(r=>r.json()).then(d=>{ sections = d.sections||[]; renderConfig(); });
