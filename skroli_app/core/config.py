@@ -10,10 +10,10 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .enhancers.engagement.config import EngagementConfig
-from .enhancers.score.config import ScoreConfig
-from .ingestors.hackernews.config import HnConfig
-from .ingestors.rss.config import RssConfig
+from ..enhancers.engagement.config import EngagementConfig
+from ..enhancers.score.config import ScoreConfig
+from ..ingestors.hackernews.config import HnConfig
+from ..ingestors.rss.config import RssConfig
 
 DEFAULT_CONFIG_NAME = "skroli.config.toml"
 

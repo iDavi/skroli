@@ -25,8 +25,8 @@ from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 from .config import RssConfig
-from ...fetcher import fetch
-from ...models import Item, utcnow
+from ...core.fetcher import fetch
+from ...core.models import Item, utcnow
 
 ATOM = "{http://www.w3.org/2005/Atom}"
 MEDIA = "{http://search.yahoo.com/mrss/}"

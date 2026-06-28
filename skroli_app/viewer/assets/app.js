@@ -107,19 +107,18 @@ function _append(id, frag){
   w.insertAdjacentHTML('beforeend', frag);
   const last = w.lastElementChild.querySelector('input'); if(last) last.focus();
 }
-function addFeed(){ _append('feeds',
-  '<div class="erow"><input placeholder="https://example.com/feed.xml">'+
-  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
-function addSub(){ _append('subs',
-  '<div class="erow"><span class="pre">r/</span><input placeholder="subreddit">'+
-  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
-function addWeight(){ _append('weights',
-  '<div class="erow"><input class="wname" list="srclist" placeholder="pick or type a source">'+
-  '<input class="wval" type="number" step="0.1" placeholder="1.0">'+
-  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
-function addLb(value){ _append('letterboxd',
-  '<div class="erow"><span class="pre">@</span><input value="'+(value?esc(value):'')+'" placeholder="username">'+
-  '<button class="x" type="button" onclick="rm(this)">×</button></div>'); }
+// Row builders shared by the form renderer and the "+ add" buttons.
+const X = '<button class="x" type="button" onclick="rm(this)">×</button>';
+function feedRow(v){ return '<div class="erow"><input value="'+esc(v||'')+'" placeholder="https://example.com/feed.xml">'+X+'</div>'; }
+function subRow(v){ return '<div class="erow"><span class="pre">r/</span><input value="'+esc(v||'')+'" placeholder="subreddit">'+X+'</div>'; }
+function lbRow(v){ return '<div class="erow"><span class="pre">@</span><input value="'+esc(v||'')+'" placeholder="username">'+X+'</div>'; }
+function weightRow(n,v){ return '<div class="erow"><input class="wname" list="srclist" value="'+esc(n||'')+'" placeholder="pick or type a source">'+
+  '<input class="wval" type="number" step="0.1" value="'+esc(v==null?'':v)+'" placeholder="1.0">'+X+'</div>'; }
+function toggleHTML(id,on){ return '<label class="toggle"><span>enabled</span><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'></label>'; }
+function addFeed(){ _append('feeds', feedRow()); }
+function addSub(){ _append('subs', subRow()); }
+function addWeight(){ _append('weights', weightRow()); }
+function addLb(value){ _append('letterboxd', lbRow(value)); }
 async function importFollowing(btn){
   const u = document.getElementById('lb-import').value.trim().replace(/^@/,'');
   const msg = document.getElementById('lb-import-msg');
@@ -169,3 +168,67 @@ function saveEngagement(btn){
   _save('/api/engagement', {enabled:document.getElementById('eng-enabled').checked,
     weight:(isNaN(w)?0:w), cap:(isNaN(c)?2000:c)}, 'eng2-msg', btn);
 }
+
+/* ----- config forms (rendered from /api/config) ----- */
+const SUBH = 'style="font-size:12px;text-transform:uppercase;letter-spacing:.6px;color:var(--stone);margin-bottom:8px"';
+function card(inner){ return '<div class="card">'+inner+'</div>'; }
+function saverow(action, msgId){
+  return '<div class="saverow"><button class="savebtn" type="button" onclick="'+action+'(this)">Save &amp; refresh</button>'+
+         '<span class="savemsg" id="'+msgId+'"></span></div>';
+}
+function renderIngestors(c){
+  const rss = c.rss, hn = c.hackernews;
+  const rssCard = card(
+    '<div class="ctitle">RSS <span class="pill">built-in</span>'+toggleHTML('rss-enabled',rss.enabled)+'</div>'+
+    '<div class="desc">Reads any RSS or Atom feed, subreddits (via Reddit\'s API, with upvotes), and Letterboxd profiles (film reviews).</div>'+
+    '<div class="cols">'+
+      '<div class="col"><h4>Feeds</h4><div id="feeds">'+rss.feeds.map(feedRow).join('')+'</div>'+
+        '<button class="addbtn" type="button" onclick="addFeed()">+ add feed</button></div>'+
+      '<div class="col"><h4>Subreddits</h4><div id="subs">'+rss.subreddits.map(s=>subRow(s.replace(/^r\//,''))).join('')+'</div>'+
+        '<button class="addbtn" type="button" onclick="addSub()">+ add subreddit</button></div>'+
+    '</div>'+
+    '<div style="margin-top:16px"><h4 '+SUBH+'>Letterboxd profiles</h4>'+
+      '<div id="letterboxd">'+rss.letterboxd.map(u=>lbRow(u.replace(/^@/,''))).join('')+'</div>'+
+      '<button class="addbtn" type="button" onclick="addLb()">+ add profile</button>'+
+      '<div class="erow" style="border:0;margin-top:10px;padding:0"><span class="pre">@</span>'+
+        '<input id="lb-import" placeholder="username to import everyone they follow">'+
+        '<button class="x" type="button" style="width:auto;padding:0 12px;white-space:nowrap" onclick="importFollowing(this)">import following</button></div>'+
+      '<span class="savemsg" id="lb-import-msg"></span></div>'+
+    saverow('saveIngestors','ing-msg'));
+  const hnCard = card(
+    '<div class="ctitle">Hacker News <span class="pill">built-in</span>'+toggleHTML('hn-enabled',hn.enabled)+'</div>'+
+    '<div class="desc">Pulls the live front page from the official HN API, with points and comment counts the engagement enhancer can rank by.</div>'+
+    '<div class="cols"><div class="col"><h4>Parameters</h4>'+
+      '<div class="kv"><span>Stories to fetch (0 = off)</span><input id="hncount" type="number" step="5" min="0" value="'+hn.count+'"></div>'+
+    '</div><div class="col"></div></div>'+
+    saverow('saveHackernews','hn-msg'));
+  document.getElementById('ingestors').innerHTML =
+    '<div class="head"><h1>Ingestors</h1></div><div class="page">'+rssCard+hnCard+'</div>';
+}
+function renderEnhancers(c){
+  const score = c.score, eng = c.engagement;
+  const weights = Object.entries(score.weights||{}).map(([n,v])=>weightRow(n,v)).join('');
+  const scoreCard = card(
+    '<div class="ctitle">Score <span class="pill">built-in</span>'+toggleHTML('score-enabled',score.enabled)+'</div>'+
+    '<div class="desc">Ranks the feed by recency. Each item scores <code>0.5 ^ (age / half-life)</code> times its source weight.</div>'+
+    '<div class="cols">'+
+      '<div class="col"><h4>Parameters</h4><div class="kv"><span>Half-life (hours)</span>'+
+        '<input id="halflife" type="number" step="0.5" min="0.1" value="'+score.half_life_hours+'"></div></div>'+
+      '<div class="col"><h4>Source weights</h4><div id="weights">'+weights+'</div>'+
+        '<button class="addbtn" type="button" onclick="addWeight()">+ add weight</button></div>'+
+    '</div>'+
+    saverow('saveEnhancers','enh-msg'));
+  const engCard = card(
+    '<div class="ctitle">Engagement <span class="pill">built-in</span>'+toggleHTML('eng-enabled',eng.enabled)+'</div>'+
+    '<div class="desc">Blends community votes (Reddit upvotes, HN points) into the score: <code>(1−weight)·recency + weight·votes</code>. Items without votes (plain RSS, Letterboxd) keep their recency score.</div>'+
+    '<div class="cols">'+
+      '<div class="col"><h4>Weight (0–1)</h4><div class="kv"><span>How much votes matter</span>'+
+        '<input id="engweight" type="number" step="0.05" min="0" max="1" value="'+eng.weight+'"></div></div>'+
+      '<div class="col"><h4>Cap</h4><div class="kv"><span>Votes for a full score</span>'+
+        '<input id="engcap" type="number" step="100" min="1" value="'+eng.cap+'"></div></div>'+
+    '</div>'+
+    saverow('saveEngagement','eng2-msg'));
+  document.getElementById('enhancers').innerHTML =
+    '<div class="head"><h1>Enhancers</h1></div><div class="page">'+scoreCard+engCard+'</div>';
+}
+fetch('/api/config').then(r=>r.json()).then(c=>{ renderIngestors(c); renderEnhancers(c); });

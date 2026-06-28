@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>skroli</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body class="home">
+  <nav class="nav">
+    <div class="brand">skroli</div>
+    <div class="item active" onclick="show('home',this)"><span class="ic">⌂</span> Home</div>
+    <div class="item" onclick="show('ingestors',this)"><span class="ic">↓</span> Ingestors</div>
+    <div class="item" onclick="show('enhancers',this)"><span class="ic">⇅</span> Enhancers</div>
+    <div class="item soon"><span class="ic">⚙</span> Settings</div>
+  </nav>
+
+  <main class="feed">
+    <section id="home" class="view active">
+      <div class="head">
+        <h1>Home</h1>
+        <span class="count" id="count">0 items</span>
+        <button class="iconbtn" id="refresh" title="Refresh feed" onclick="refresh(this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/>
+          </svg>
+        </button>
+      </div>
+      <div id="posts"><div class="empty">Loading your feed…</div></div>
+    </section>
+    <section id="ingestors" class="view"></section>
+    <section id="enhancers" class="view"></section>
+  </main>
+
+  <aside class="rail">
+    <div class="panel"><h3>Sources</h3><div id="sources"><div class="srcrow">none yet</div></div></div>
+  </aside>
+
+  <datalist id="srclist"></datalist>
+  <script src="/app.js"></script>
+</body>
+</html>
