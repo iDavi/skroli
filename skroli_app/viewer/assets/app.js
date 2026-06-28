@@ -1,95 +1,126 @@
-/* ----- navigation + in-app browser tabs ----- */
-let nav = 'home';            // 'home' | 'ingestors' | 'enhancers'
-let activeTab = 'feed';      // 'feed' | a post url
-const tabs = [];             // [{url, title}]
+/* ----- the app is a browser: everything is a tab ----------------------------
+   Tabs are the core navigation. Internal pages (Feed / Ingestors / Enhancers)
+   and opened posts are all tabs; the sidebar just opens/focuses them. Tabs can
+   be reordered (drag) and closed, and there's always at least one open. */
+let tabs = [{ key: 'feed', kind: 'feed', title: 'Feed' }];
+let activeKey = 'feed';
+const INTERNAL = { home: ['feed', 'Feed'], ingestors: ['ingestors', 'Ingestors'], enhancers: ['enhancers', 'Enhancers'] };
 
-function show(view, el){      // nav clicks (Home / Ingestors / Enhancers)
-  nav = view;
-  document.querySelectorAll('.nav .item').forEach(n=>n.classList.remove('active'));
-  if(el) el.classList.add('active');
+function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
+
+function show(view){                       // sidebar launcher → open/focus a tab
+  const [kind, title] = INTERNAL[view] || [];
+  if (kind) openInternal(kind, title);
+}
+function openInternal(kind, title){
+  let t = tabs.find(x => x.kind === kind);
+  if (!t){ t = { key: kind, kind, title }; tabs.push(t); }
+  activeKey = t.key;
+  render();
+}
+function openPage(url, title){
+  if (!url) return;
+  const key = 'page:' + url;
+  if (!tabs.find(t => t.key === key)){
+    tabs.push({ key, kind: 'page', title: title || url, url });
+    const div = document.createElement('div');
+    div.className = 'tabview'; div.dataset.key = key;
+    div.innerHTML = '<div class="empty">Opening…</div>';
+    document.getElementById('browser').appendChild(div);
+    loadPage(key, url, div);
+  }
+  activeKey = key;
+  render();
+}
+function closeTab(key){
+  const i = tabs.findIndex(t => t.key === key);
+  if (i < 0) return;
+  const t = tabs[i];
+  tabs.splice(i, 1);
+  if (t.kind === 'page'){
+    const d = document.querySelector('#browser .tabview[data-key="' + CSS.escape(key) + '"]');
+    if (d) d.remove();
+  }
+  if (!tabs.length) tabs.push({ key: 'feed', kind: 'feed', title: 'Feed' });
+  if (activeKey === key) activeKey = (tabs[Math.max(0, i - 1)] || tabs[0]).key;
+  render();
+}
+function reorder(fromKey, toKey){
+  const fi = tabs.findIndex(t => t.key === fromKey), ti = tabs.findIndex(t => t.key === toKey);
+  if (fi < 0 || ti < 0 || fi === ti) return;
+  const [moved] = tabs.splice(fi, 1);
+  tabs.splice(ti, 0, moved);
   render();
 }
 function render(){
-  const browsing = nav === 'home';
-  const onFeed = browsing && activeTab === 'feed';
-  document.getElementById('tabs').style.display = browsing ? '' : 'none';
-  document.getElementById('home').classList.toggle('active', onFeed);
-  document.getElementById('browser').classList.toggle('active', browsing && !onFeed);
-  document.getElementById('ingestors').classList.toggle('active', nav === 'ingestors');
-  document.getElementById('enhancers').classList.toggle('active', nav === 'enhancers');
-  document.body.classList.toggle('home', onFeed);   // rail only on the feed
-  document.body.classList.toggle('reading', browsing && !onFeed);  // widen for the browser
-  document.querySelectorAll('#browser .tabview').forEach(tv=>
-    tv.classList.toggle('active', tv.dataset.url === activeTab));
+  const at = activeTab();
+  document.getElementById('home').classList.toggle('active', at.kind === 'feed');
+  document.getElementById('ingestors').classList.toggle('active', at.kind === 'ingestors');
+  document.getElementById('enhancers').classList.toggle('active', at.kind === 'enhancers');
+  document.getElementById('browser').classList.toggle('active', at.kind === 'page');
+  document.querySelectorAll('#browser .tabview').forEach(tv =>
+    tv.classList.toggle('active', tv.dataset.key === activeKey));
+  const navIndex = { feed: 0, ingestors: 1, enhancers: 2 };
+  document.querySelectorAll('.nav .item').forEach((n, i) => n.classList.toggle('active', i === navIndex[at.kind]));
+  document.body.classList.toggle('home', at.kind === 'feed');     // rail only on the feed
+  document.body.classList.toggle('reading', at.kind === 'page');  // widen for the browser
   renderTabs();
 }
 function renderTabs(){
-  const bar = document.getElementById('tabs');
-  let h = '<div class="tab'+(activeTab==='feed'?' active':'')+'" data-url="feed">Feed</div>';
-  tabs.forEach(t=>{
-    h += '<div class="tab'+(activeTab===t.url?' active':'')+'" data-url="'+esc(t.url)+'" title="'+esc(t.title)+'">'+
-         '<span class="tlabel">'+esc(t.title||t.url)+'</span>'+
+  let h = '';
+  tabs.forEach(t => {
+    h += '<div class="tab' + (t.key === activeKey ? ' active' : '') + '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(t.title) + '">' +
+         '<span class="tlabel">' + esc(t.title) + '</span>' +
          '<span class="tclose" data-close="1">×</span></div>';
   });
-  bar.innerHTML = h;
+  h += '<div class="tabadd" id="tabadd" title="New tab">+</div>';
+  document.getElementById('tabs').innerHTML = h;
 }
-function setTab(key){ activeTab = key; if(nav!=='home') nav='home'; render(); }
-function closeTab(url){
-  const i = tabs.findIndex(t=>t.url===url);
-  if(i<0) return;
-  tabs.splice(i,1);
-  const div = document.querySelector('#browser .tabview[data-url="'+CSS.escape(url)+'"]');
-  if(div) div.remove();
-  if(activeTab===url) activeTab = tabs.length ? tabs[Math.max(0,i-1)].url : 'feed';
-  render();
-}
-function openTab(url, title){
-  if(!url) return;
-  if(!tabs.find(t=>t.url===url)){
-    tabs.push({url, title: title || url});
-    const div = document.createElement('div');
-    div.className = 'tabview'; div.dataset.url = url;
-    div.innerHTML = '<div class="empty">Opening…</div>';
-    document.getElementById('browser').appendChild(div);
-    loadTab(url, div);
-  }
-  activeTab = url; nav = 'home';
-  document.querySelectorAll('.nav .item').forEach((n,i)=>n.classList.toggle('active', i===0));
-  render();
-}
-async function loadTab(url, div){
+async function loadPage(key, url, div){
   try{
-    const d = await (await fetch('/api/open?url='+encodeURIComponent(url))).json();
+    const d = await (await fetch('/api/open?url=' + encodeURIComponent(url))).json();
     div.innerHTML = browserView(d);
-    if(d.mode==='reader' && d.title){ const t=tabs.find(x=>x.url===url); if(t){ t.title=d.title; renderTabs(); } }
+    if (d.mode === 'reader' && d.title){ const t = tabs.find(x => x.key === key); if (t){ t.title = d.title; renderTabs(); } }
   }catch(e){
-    div.innerHTML = '<div class="bbar"><a class="act" href="'+esc(url)+'" target="_blank" rel="noopener">open original ↗</a></div>'+
+    div.innerHTML = '<div class="bbar"><a class="act" href="' + esc(url) + '" target="_blank" rel="noopener">open original ↗</a></div>' +
       '<div class="empty">Couldn’t open this page.</div>';
   }
 }
 function browserView(d){
-  const bar = '<div class="bbar"><a class="act" href="'+esc(d.url)+'" target="_blank" rel="noopener">open original ↗</a></div>';
-  if(d.mode==='iframe') return bar+'<iframe class="bframe" src="'+esc(d.url)+'" referrerpolicy="no-referrer"></iframe>';
-  if(d.mode==='reader'){
-    const img = d.image ? '<img class="rimg" src="'+esc(d.image)+'" alt="" onerror="this.remove()">' : '';
-    const by  = d.byline ? '<div class="rby">'+esc(d.byline)+'</div>' : '';
-    return bar+'<article class="reader"><h1>'+esc(d.title)+'</h1>'+by+img+
-      '<div class="rbody">'+(d.html || '<p>(no readable content)</p>')+'</div></article>';
+  const bar = '<div class="bbar"><a class="act" href="' + esc(d.url) + '" target="_blank" rel="noopener">open original ↗</a></div>';
+  if (d.mode === 'iframe') return bar + '<iframe class="bframe" src="' + esc(d.url) + '" referrerpolicy="no-referrer"></iframe>';
+  if (d.mode === 'reader'){
+    const img = d.image ? '<img class="rimg" src="' + esc(d.image) + '" alt="" onerror="this.remove()">' : '';
+    const by  = d.byline ? '<div class="rby">' + esc(d.byline) + '</div>' : '';
+    return bar + '<article class="reader"><h1>' + esc(d.title) + '</h1>' + by + img +
+      '<div class="rbody">' + (d.html || '<p>(no readable content)</p>') + '</div></article>';
   }
-  return bar+'<div class="empty">Couldn’t load this page.</div>';
+  return bar + '<div class="empty">Couldn’t load this page.</div>';
 }
+let _dragKey = null;
 document.addEventListener('DOMContentLoaded', ()=>{
-  document.getElementById('tabs').addEventListener('click', e=>{
-    const tab = e.target.closest('.tab'); if(!tab) return;
-    if(e.target.closest('.tclose')) closeTab(tab.dataset.url);
-    else setTab(tab.dataset.url);
+  const bar = document.getElementById('tabs');
+  bar.addEventListener('click', e => {
+    if (e.target.id === 'tabadd'){ openInternal('feed', 'Feed'); return; }
+    const tab = e.target.closest('.tab'); if (!tab) return;
+    if (e.target.closest('.tclose')) closeTab(tab.dataset.key);
+    else { activeKey = tab.dataset.key; render(); }
   });
-  document.getElementById('posts').addEventListener('click', e=>{
+  bar.addEventListener('dragstart', e => { const t = e.target.closest('.tab'); if (t) _dragKey = t.dataset.key; });
+  bar.addEventListener('dragover', e => e.preventDefault());
+  bar.addEventListener('drop', e => {
+    e.preventDefault();
+    const t = e.target.closest('.tab');
+    if (t && _dragKey) reorder(_dragKey, t.dataset.key);
+    _dragKey = null;
+  });
+  document.getElementById('posts').addEventListener('click', e => {
     const link = e.target.closest('[data-open]');
-    if(link){ e.stopPropagation(); openTab(link.dataset.open, link.dataset.openTitle||''); return; }
+    if (link){ e.stopPropagation(); openPage(link.dataset.open, link.dataset.openTitle || ''); return; }
     const post = e.target.closest('.post');
-    if(post && post.dataset.url) openTab(post.dataset.url, post.dataset.title);
+    if (post && post.dataset.url) openPage(post.dataset.url, post.dataset.title);
   });
+  render();
 });
 
 /* ----- live feed over WebSocket ----- */

@@ -64,10 +64,13 @@ def _title(text: str) -> str:
 
 
 def _region(text: str) -> str:
+    # Pick the richest candidate: the longest <article>/<main>, else the body.
+    candidates: list[str] = []
     for tag in ("article", "main"):
-        m = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", text, re.I | re.S)
-        if m and len(m.group(1)) > 200:
-            return m.group(1)
+        candidates += re.findall(rf"<{tag}[^>]*>(.*?)</{tag}>", text, re.I | re.S)
+    best = max(candidates, key=len, default="")
+    if len(best) > 400:
+        return best
     m = re.search(r"<body[^>]*>(.*?)</body>", text, re.I | re.S)
     return m.group(1) if m else text
 
