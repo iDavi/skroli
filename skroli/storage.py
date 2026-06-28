@@ -22,6 +22,19 @@ def _load_meta(raw: str) -> dict:
         return {}
 
 
+def _derive_origin(source: str) -> str | None:
+    """Best-effort origin for items stored before origins were tagged, derived
+    from the source name. Lets the purge clean up legacy Reddit/Letterboxd/HN
+    items; plain feeds can't be mapped, so they're left alone."""
+    if source.startswith("Letterboxd · "):
+        return "letterboxd:" + source[len("Letterboxd · "):]
+    if source.startswith("r/"):
+        return "reddit:" + source[2:]
+    if source == "Hacker News":
+        return "hn"
+    return None
+
+
 class Storage:
     def __init__(self, db_path: str | Path):
         # Streaming means several threads (ingestor fetches, the enhancer worker,
@@ -127,10 +140,11 @@ class Storage:
         was removed). Items without an origin (legacy) are left alone."""
         removed = 0
         with self._lock:
-            rows = self._db.execute("SELECT id, meta FROM items WHERE saved = 0").fetchall()
+            rows = self._db.execute("SELECT id, source, meta FROM items WHERE saved = 0").fetchall()
             stale = [
                 r["id"] for r in rows
-                if (o := _load_meta(r["meta"]).get("origin")) is not None and o not in valid_origins
+                if (o := _load_meta(r["meta"]).get("origin") or _derive_origin(r["source"]))
+                is not None and o not in valid_origins
             ]
             for rid in stale:
                 self._db.execute("DELETE FROM items WHERE id = ?", (rid,))

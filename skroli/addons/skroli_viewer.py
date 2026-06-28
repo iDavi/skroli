@@ -55,7 +55,8 @@ a{color:inherit;text-decoration:none}
  display:flex;align-items:center;justify-content:center}
 .iconbtn:hover{background:var(--card)}
 .iconbtn:disabled{opacity:.5;cursor:default}
-.iconbtn.spin{animation:spin .8s linear infinite}
+.iconbtn svg{width:17px;height:17px;display:block}
+.iconbtn.spin svg{animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ---------- feed posts ---------- */
@@ -475,7 +476,7 @@ def render_page(config: Config) -> str:
   <section id="home" class="view active">
     <div class="head"><h1>Home</h1>
       <span class="count" id="count">0 items</span>
-      <button class="iconbtn" id="refresh" title="Refresh feed" onclick="refresh(this)">↻</button></div>
+      <button class="iconbtn" id="refresh" title="Refresh feed" onclick="refresh(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button></div>
     <div id="posts"><div class="empty">Loading your feed…</div></div>
   </section>
   <section id="ingestors" class="view">{_ingestors_page(config)}</section>
