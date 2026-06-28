@@ -228,8 +228,30 @@ class SkroliViewer:
             try:
                 import webview  # pywebview
 
+                # Frameless so our tab bar IS the title bar (browser-style). The
+                # JS calls these to drive the missing native window buttons.
+                class WindowControls:
+                    def __init__(self):
+                        self.window = None
+
+                    def win_close(self):
+                        if self.window:
+                            self.window.destroy()
+
+                    def win_minimize(self):
+                        if self.window:
+                            self.window.minimize()
+
+                    def win_zoom(self):
+                        if self.window:
+                            self.window.toggle_fullscreen()
+
+                controls = WindowControls()
                 threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
-                webview.create_window("skroli", url, width=1200, height=900)
+                controls.window = webview.create_window(
+                    "skroli", url, width=1200, height=900,
+                    frameless=True, easy_drag=False, js_api=controls,
+                )
                 webview.start()
                 return
             except ImportError:

@@ -8,6 +8,13 @@ let feedSeq = 0;
 
 function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
 
+/* frameless window controls (pywebview desktop app) */
+function winClose(){ if (window.pywebview) pywebview.api.win_close(); }
+function winMin(){ if (window.pywebview) pywebview.api.win_minimize(); }
+function winZoom(){ if (window.pywebview) pywebview.api.win_zoom(); }
+window.addEventListener('pywebviewready', () => document.body.classList.add('desktop'));
+if (window.pywebview) document.body.classList.add('desktop');
+
 function show(view){      // sidebar: Home goes to the feed; the others are views
   if (view === 'home'){ section = 'browse'; focusOrNewFeed(); }
   else { section = view; render(); }

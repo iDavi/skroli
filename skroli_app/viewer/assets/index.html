@@ -7,7 +7,15 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body class="home">
-  <div class="tabs" id="tabs"></div>
+  <div class="topbar">
+    <div class="wctl" id="wctl">
+      <button class="wbtn wclose" title="Close" onclick="winClose()"></button>
+      <button class="wbtn wmin" title="Minimize" onclick="winMin()"></button>
+      <button class="wbtn wzoom" title="Zoom" onclick="winZoom()"></button>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="dragspace pywebview-drag-region"></div>
+  </div>
   <div class="shell">
     <nav class="nav">
       <div class="brand">skroli</div>
