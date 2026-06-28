@@ -1,7 +1,7 @@
-"""Configuration loading (SPECS §9).
+"""Top-level configuration (SPECS §9).
 
-Reads ``skroli.config.toml`` and fills in defaults. The format is intentionally
-small for 0.0.1; it grows as more of the spec is implemented.
+Each addon owns its own config schema (e.g. ``ingestors/rss/config.py``); this
+module just aggregates them into one ``Config`` and reads/writes the TOML file.
 """
 
 from __future__ import annotations
@@ -9,6 +9,11 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .enhancers.engagement.config import EngagementConfig
+from .enhancers.score.config import ScoreConfig
+from .ingestors.hackernews.config import HnConfig
+from .ingestors.rss.config import RssConfig
 
 DEFAULT_CONFIG_NAME = "skroli.config.toml"
 
@@ -19,39 +24,6 @@ class RuntimeConfig:
     retention_hours: int = 48
     port: int = 4242
     open_window: bool = False  # use pywebview if available
-
-
-@dataclass
-class RssConfig:
-    enabled: bool = True
-    feeds: list[str] = field(default_factory=list)
-    subreddits: list[str] = field(default_factory=list)
-    letterboxd: list[str] = field(default_factory=list)  # usernames → film reviews
-
-
-@dataclass
-class HnConfig:
-    # Hacker News via the official Algolia API (real points + comment counts).
-    enabled: bool = True
-    count: int = 30  # how many front-page stories to pull
-
-
-@dataclass
-class ScoreConfig:
-    # Half-life (hours) for recency decay and optional per-source weights.
-    enabled: bool = True
-    half_life_hours: float = 12.0
-    weights: dict[str, float] = field(default_factory=dict)
-
-
-@dataclass
-class EngagementConfig:
-    # Blend community engagement (Reddit upvotes, HN points) into the score.
-    # final = (1 - weight)·recency + weight·engagement, engagement log-normalised
-    # against ``cap`` votes. weight 0 = ignore engagement entirely.
-    enabled: bool = True
-    weight: float = 0.4
-    cap: int = 2000
 
 
 @dataclass

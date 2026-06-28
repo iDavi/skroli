@@ -8,11 +8,11 @@ import threading
 import time
 
 from . import __version__
-from .addons.rss_ingestor import RssIngestor
-from .addons.hn_ingestor import HackerNewsIngestor
-from .addons.score_enhancer import ScoreEnhancer
-from .addons.engagement_enhancer import EngagementEnhancer
-from .addons.skroli_viewer import SkroliViewer
+from .ingestors.rss.ingestor import RssIngestor
+from .ingestors.hackernews.ingestor import HackerNewsIngestor
+from .enhancers.score.enhancer import ScoreEnhancer
+from .enhancers.engagement.enhancer import EngagementEnhancer
+from .viewer.viewer import SkroliViewer
 from .config import load_config, save_config
 from .pipeline import Engine
 from .storage import Storage

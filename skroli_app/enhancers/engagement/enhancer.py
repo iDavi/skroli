@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import math
 
-from ..config import EngagementConfig
-from ..models import Item
+from .config import EngagementConfig
+from ...models import Item
 
 _NEUTRAL = 0.5  # assumed engagement for items that carry no vote signal
 

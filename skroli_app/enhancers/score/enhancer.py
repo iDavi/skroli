@@ -7,8 +7,8 @@ Deliberately simple — a real ranker is a swappable addon.
 
 from __future__ import annotations
 
-from ..config import ScoreConfig
-from ..models import Item, utcnow
+from .config import ScoreConfig
+from ...models import Item, utcnow
 
 
 class ScoreEnhancer:

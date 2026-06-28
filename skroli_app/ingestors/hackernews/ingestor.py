@@ -11,9 +11,9 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
-from ..config import HnConfig
-from ..fetcher import fetch
-from ..models import Item, utcnow
+from .config import HnConfig
+from ...fetcher import fetch
+from ...models import Item, utcnow
 
 API = "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage="
 ITEM_URL = "https://news.ycombinator.com/item?id="
