@@ -22,6 +22,9 @@ a{color:inherit;text-decoration:none}
 
 /* ---------- middle column ---------- */
 .feed{width:600px;flex:0 0 600px;border-right:1px solid var(--olive-line);overflow-y:auto;min-height:0}
+/* page (browser) view: no right rail, page fills the remaining width */
+body.pageview .rail{display:none}
+body.pageview .feed{flex:1 1 auto;width:auto;border-right:0}
 .head{position:sticky;top:0;z-index:2;backdrop-filter:blur(8px);background:rgba(79,75,59,.85);
  border-bottom:1px solid var(--olive-line);padding:16px 22px;display:flex;
  align-items:center;justify-content:space-between;gap:14px}
@@ -129,6 +132,8 @@ body.home .rail .panel{display:block}
 .tabs{display:flex;overflow-x:auto;overflow-y:hidden;min-width:0;scrollbar-width:none;overscroll-behavior:contain}
 .tabs::-webkit-scrollbar{display:none}  /* (4) wheel-scrolled, no ugly bar; (10) no page-scroll bleed */
 .dragspace{flex:1;min-width:30px}
+/* leave room for the OS traffic lights that overlay the strip in the desktop app */
+body.desktop .topbar{padding-left:80px}
 .tab{position:relative;flex:0 1 220px;min-width:54px;display:flex;align-items:center;gap:8px;padding:0 14px;height:44px;font-size:14px;cursor:pointer;
  -webkit-user-select:none;user-select:none;color:var(--parchment-dim);border-right:1px solid var(--olive-line)}
 .tab:hover{background:var(--card)}

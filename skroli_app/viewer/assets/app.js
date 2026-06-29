@@ -11,6 +11,11 @@ function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
 function nextTabKey(key){ const i = tabs.findIndex(t => t.key === key); return (i >= 0 && i + 1 < tabs.length) ? tabs[i + 1].key : null; }
 function hostOf(u){ try { return new URL(u).hostname; } catch(_){ return ''; } }
 
+/* desktop app (pywebview): reserve space at the strip's left edge for the OS
+   traffic-light buttons that float over our tab row (Chrome-style). */
+window.addEventListener('pywebviewready', () => document.body.classList.add('desktop'));
+if (window.pywebview) document.body.classList.add('desktop');
+
 /* ---- (1) session persistence ---- */
 function saveState(){
   try {
@@ -171,6 +176,7 @@ function render(){
   const navSel = section === 'ingestors' ? 1 : section === 'enhancers' ? 2 : 0;
   document.querySelectorAll('.nav .item').forEach((n, i) => n.classList.toggle('active', i === navSel));
   document.body.classList.toggle('home', kind === 'feed');
+  document.body.classList.toggle('pageview', kind === 'page');  // full-width page, no rail
   renderTabs();
   saveState();
 }
