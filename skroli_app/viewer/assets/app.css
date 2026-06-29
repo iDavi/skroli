@@ -166,7 +166,8 @@ body.desktop .wctl{display:flex}
 .tab[draggable="true"]{cursor:grab}
 .tab.active[draggable="true"]{cursor:default}
 .tabadd{flex:0 0 auto;display:flex;align-items:center;justify-content:center;width:40px;height:44px;
- font-size:20px;color:var(--stone);cursor:pointer;border-right:1px solid var(--olive-line)}
+ background:transparent;border:0;border-right:1px solid var(--olive-line);padding:0;
+ font-family:inherit;font-size:20px;line-height:1;color:var(--stone);cursor:pointer}
 .tabadd:hover{background:var(--card);color:var(--parchment)}
 
 /* feed tab containers (several feeds possible) */

@@ -193,8 +193,7 @@ function renderTabs(){
   // (1)(7) only rebuild when the strip's visible state actually changed, so
   // favicons don't reload / flicker on every feed update or hover.
   const sig = tabs.map(t => t.key + '|' + tabTitle(t) + '|' + (t.kind === 'page' ? (t.loading ? 'L' : 'F') + hostOf(t.url) : '') +
-    '|' + (t.key === activeKey && section === 'browse' ? 'A' : '') + '|' + (t.key === _dragKey ? 'D' : '') +
-    '|' + (t.key === _dropKey ? 'O' : '')).join('§') + '#' + section;
+    '|' + (t.key === activeKey && section === 'browse' ? 'A' : '')).join('§') + '#' + section;
   if (sig === _tabSig){ scrollActiveTabIntoView(); return; }
   _tabSig = sig;
   let h = '';
@@ -321,22 +320,40 @@ document.addEventListener('DOMContentLoaded', ()=>{
     bar.scrollLeft += e.deltaY;
     e.preventDefault();
   }, { passive: false });
-  // (9) drag-reorder with an insertion indicator; the whole topbar is a drop target
-  // so releasing over the + button or drag space drops at the end.
-  topbar.addEventListener('dragstart', e => { const t = e.target.closest('.tab'); if (t){ _dragKey = t.dataset.key; renderTabs(); } });
-  topbar.addEventListener('dragend', () => { _dragKey = null; _dropKey = null; renderTabs(); });
+  // (9) drag-reorder with an insertion indicator; the whole topbar is a drop
+  // target so releasing over the + button or drag space drops at the end.
+  // NB: never re-render the strip during a drag — replacing the dragged node's
+  // DOM cancels the browser's drag. We toggle classes on the live elements.
+  function markDrop(key){
+    if (key === _dropKey) return;
+    _dropKey = key;
+    bar.querySelectorAll('.tab').forEach(el => el.classList.toggle('dropbefore', el.dataset.key === key));
+  }
+  topbar.addEventListener('dragstart', e => {
+    const t = e.target.closest('.tab');
+    if (t){ _dragKey = t.dataset.key; setTimeout(() => t.classList.add('dragging'), 0); }
+  });
+  topbar.addEventListener('dragend', () => {
+    _dragKey = null; _dropKey = null;
+    bar.querySelectorAll('.tab').forEach(el => el.classList.remove('dragging', 'dropbefore'));
+  });
   topbar.addEventListener('dragover', e => {
     if (!_dragKey) return;
     e.preventDefault();
     const t = e.target.closest('.tab');
-    let dropKey = null;
-    if (t){ const r = t.getBoundingClientRect(); dropKey = (e.clientX < r.left + r.width / 2) ? t.dataset.key : nextTabKey(t.dataset.key); }
-    if (dropKey !== _dropKey){ _dropKey = dropKey; renderTabs(); }
+    if (t && t.dataset.key !== _dragKey){
+      const r = t.getBoundingClientRect();
+      markDrop(e.clientX < r.left + r.width / 2 ? t.dataset.key : nextTabKey(t.dataset.key));
+    } else if (!t){
+      markDrop(null);   // over the + button / drag space → append at end
+    }
   });
   topbar.addEventListener('drop', e => {
     e.preventDefault();
-    if (_dragKey) reorder(_dragKey, _dropKey);
+    const from = _dragKey, to = _dropKey;
     _dragKey = null; _dropKey = null;
+    bar.querySelectorAll('.tab').forEach(el => el.classList.remove('dragging', 'dropbefore'));
+    if (from) reorder(from, to);
   });
   document.getElementById('feeds').addEventListener('click', onPostClick);
   document.getElementById('feeds').addEventListener('auxclick', e => { if (e.button === 1) onPostClick(e); });
