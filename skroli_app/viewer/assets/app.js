@@ -11,13 +11,6 @@ function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
 function nextTabKey(key){ const i = tabs.findIndex(t => t.key === key); return (i >= 0 && i + 1 < tabs.length) ? tabs[i + 1].key : null; }
 function hostOf(u){ try { return new URL(u).hostname; } catch(_){ return ''; } }
 
-/* frameless window controls (pywebview desktop app) */
-function winClose(){ if (window.pywebview) pywebview.api.win_close(); }
-function winMin(){ if (window.pywebview) pywebview.api.win_minimize(); }
-function winZoom(){ if (window.pywebview) pywebview.api.win_zoom(); }
-window.addEventListener('pywebviewready', () => document.body.classList.add('desktop'));
-if (window.pywebview) document.body.classList.add('desktop');
-
 /* ---- (1) session persistence ---- */
 function saveState(){
   try {
