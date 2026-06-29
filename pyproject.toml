@@ -9,8 +9,10 @@ license = { text = "GPL-3.0-or-later" }
 dependencies = []
 
 [project.optional-dependencies]
-# Native desktop window instead of opening a browser tab.
+# Lightweight native window (single web view) instead of a browser tab.
 desktop = ["pywebview>=5.0"]
+# Full cross-platform native shell: real OS window + native browser-style tabs.
+native = ["PySide6>=6.6"]
 
 [project.scripts]
 skroli = "skroli_app.cli:main"

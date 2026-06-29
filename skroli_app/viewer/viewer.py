@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -124,13 +125,14 @@ class SkroliViewer:
 
             # ---- GET: static assets, config, websocket --------------------
             def do_GET(self):
+                route = self.path.split("?", 1)[0]   # ignore query (e.g. ?shell=1)
                 if self.path == "/ws":
                     self._serve_ws()
-                elif self.path in ("/", "/index.html"):
+                elif route in ("/", "/index.html"):
                     self._send(_asset("index.html"), "text/html; charset=utf-8")
-                elif self.path == "/app.css":
+                elif route == "/app.css":
                     self._send(_asset("app.css"), "text/css; charset=utf-8")
-                elif self.path == "/app.js":
+                elif route == "/app.js":
                     self._send(_asset("app.js"), "application/javascript; charset=utf-8")
                 elif self.path == "/api/config":
                     self._json({"sections": [
@@ -225,20 +227,34 @@ class SkroliViewer:
         url = f"http://127.0.0.1:{self.port}"
 
         if open_window:
+            threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+
+            # Preferred: the cross-platform native shell (real OS window + native
+            # tabs). Falls back to pywebview, then to a plain browser tab.
+            try:
+                from . import native_shell
+
+                native_shell.run(url)
+                return
+            except ImportError:
+                pass
+
             try:
                 import webview  # pywebview
 
-                # Plain native window: the OS draws a real title bar with real
-                # close/minimize/zoom buttons. The tab strip sits just below it.
-                # (Insetting the title bar so the buttons share the tab row hides
-                # the tabs under the title bar via WKWebView — not worth the
-                # native hit-testing it would take to do safely.)
-                threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
                 webview.create_window("skroli", url, width=1200, height=900)
                 webview.start()
                 return
             except ImportError:
-                print("  (pywebview not installed; serving in browser instead)")
+                print("  (no native toolkit installed; open the URL below)")
+
+            print(f"\n  skroli is running → open {url}\n  Ctrl-C to stop.\n")
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                print("\n  stopped.")
+            return
 
         print(f"\n  skroli is running → open {url}\n  Ctrl-C to stop.\n")
         try:

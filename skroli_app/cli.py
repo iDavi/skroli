@@ -94,7 +94,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
 
     p_run = sub.add_parser("run", help="run the pipeline and serve the viewer")
-    p_run.add_argument("--window", action="store_true", help="open a native window (needs skroli[desktop])")
+    p_run.add_argument("--window", action="store_true",
+                       help="open a native window (native shell via skroli[native], else skroli[desktop])")
     p_run.set_defaults(func=cmd_run)
 
     p_fetch = sub.add_parser("fetch", help="run one cycle and exit (no server)")

@@ -11,10 +11,12 @@ function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
 function nextTabKey(key){ const i = tabs.findIndex(t => t.key === key); return (i >= 0 && i + 1 < tabs.length) ? tabs[i + 1].key : null; }
 function hostOf(u){ try { return new URL(u).hostname; } catch(_){ return ''; } }
 
-/* desktop app (pywebview): reserve space at the strip's left edge for the OS
-   traffic-light buttons that float over our tab row (Chrome-style). */
-window.addEventListener('pywebviewready', () => document.body.classList.add('desktop'));
-if (window.pywebview) document.body.classList.add('desktop');
+/* Native shell mode (PySide6 + QtWebEngine): the native window owns the tab bar,
+   so we hide our own web tab strip and open posts/comments as real native tabs
+   (window.open → the shell's createWindow). Internal views (feed, source pages,
+   config) still navigate inside this web app. */
+const SHELL = new URLSearchParams(location.search).get('shell') === '1';
+if (SHELL) document.body.classList.add('shell');
 
 /* ---- (1) session persistence ---- */
 function saveState(){
@@ -97,6 +99,7 @@ function openSource(source){
 function openPage(url, title, opts){
   if (!url) return;
   opts = opts || {};
+  if (SHELL){ window.open(url, '_blank'); return; }   // hand off to a native tab
   const exist = tabs.find(t => t.kind === 'page' && t.url === url);
   if (exist && !opts.force){
     if (!opts.background){ section = 'browse'; activeKey = exist.key; render(); }
