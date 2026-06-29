@@ -17,6 +17,32 @@ falls back to pywebview, then to a plain browser tab.
 
 from __future__ import annotations
 
+# Qt stylesheet matching the web UI's design tokens (olive / parchment / gold)
+# so the native window + tab bar look like skroli, not default dark Qt.
+_QSS = """
+QMainWindow, QWidget { background: #4f4b3b; }
+QTabWidget::pane { border: 0; top: 0; }
+QTabBar { background: #4f4b3b; qproperty-drawBase: 0; }
+QTabBar::tab {
+  background: #4f4b3b; color: #d9d6c8;
+  height: 44px; min-width: 92px; max-width: 220px; padding: 0 14px;
+  border: 0; border-right: 1px solid #605b46;
+  font-family: "Libertinus Math", "Libertinus Serif", Georgia, serif;
+  font-size: 14px;
+}
+QTabBar::tab:hover { background: #56523f; }
+QTabBar::tab:selected {
+  background: #56523f; color: #f5f3ec;
+  border-bottom: 2px solid #c9b27a;
+}
+QTabBar::close-button { subcontrol-position: right; margin-left: 6px; }
+QToolButton {
+  background: transparent; color: #959389; border: 0;
+  font-size: 20px; padding: 4px 14px;
+}
+QToolButton:hover { background: #56523f; color: #f5f3ec; }
+"""
+
 
 def run(url: str) -> None:
     """Open the native shell pointed at the local server ``url`` and block until
@@ -32,6 +58,7 @@ def run(url: str) -> None:
     )
 
     app = QApplication.instance() or QApplication(sys.argv)
+    app.setStyleSheet(_QSS)
     # One shared profile so cookies/cache/logins persist across tabs.
     profile = QWebEngineProfile("skroli", app)
 
