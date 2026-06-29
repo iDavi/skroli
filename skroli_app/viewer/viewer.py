@@ -27,39 +27,6 @@ def _asset(name: str) -> bytes:
     return (_ASSETS / name).read_bytes()
 
 
-def _make_titlebar_inset() -> None:
-    """macOS only: turn the native title bar transparent + full-size so the real
-    traffic-light buttons sit over our tab strip (Chrome-style). No-op elsewhere
-    or if AppKit isn't importable. Runs after the GUI loop starts."""
-    import sys
-    import time
-
-    if sys.platform != "darwin":
-        return
-    try:
-        from AppKit import (
-            NSApplication,
-            NSWindowStyleMaskFullSizeContentView,
-            NSWindowTitleHidden,
-        )
-    except Exception:  # noqa: BLE001 - pyobjc not available
-        return
-    # The NSWindow may not exist for a frame or two after start(); poll briefly.
-    for _ in range(50):
-        windows = list(NSApplication.sharedApplication().windows())
-        if windows:
-            for w in windows:
-                try:
-                    w.setTitlebarAppearsTransparent_(True)
-                    w.setTitleVisibility_(NSWindowTitleHidden)
-                    w.setStyleMask_(w.styleMask() | NSWindowStyleMaskFullSizeContentView)
-                    w.setMovableByWindowBackground_(True)
-                except Exception:  # noqa: BLE001
-                    pass
-            return
-        time.sleep(0.05)
-
-
 def _section_form(config, section: Section) -> dict:
     target = getattr(config, section.attr)
     return {
@@ -261,14 +228,11 @@ class SkroliViewer:
             try:
                 import webview  # pywebview
 
-                # Chrome-style chrome: a normal (non-frameless) window keeps the
-                # OS's real close/minimize/zoom buttons, but we make the title bar
-                # transparent + full-size so the real traffic lights float over
-                # our own tab strip — same row as the tabs. The CSS pads the strip
-                # left (body.desktop) so tabs clear the buttons.
+                # Plain native window: the OS draws a real title bar with real
+                # close/minimize/zoom buttons. The tab strip sits just below it.
                 threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
                 webview.create_window("skroli", url, width=1200, height=900)
-                webview.start(_make_titlebar_inset)
+                webview.start()
                 return
             except ImportError:
                 print("  (pywebview not installed; serving in browser instead)")
