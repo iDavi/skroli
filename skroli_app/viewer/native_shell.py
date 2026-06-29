@@ -27,7 +27,9 @@ def run(url: str) -> None:
     from PySide6.QtGui import QKeySequence, QShortcut
     from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
     from PySide6.QtWebEngineWidgets import QWebEngineView
-    from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget, QToolButton
+    from PySide6.QtWidgets import (
+        QApplication, QMainWindow, QTabWidget, QToolButton, QWidget,
+    )
 
     app = QApplication.instance() or QApplication(sys.argv)
     # One shared profile so cookies/cache/logins persist across tabs.
@@ -65,6 +67,14 @@ def run(url: str) -> None:
             plus.setToolTip("New feed tab")
             plus.clicked.connect(lambda: self.new_home_tab(focus=True))
             self.tabs.setCornerWidget(plus, Qt.Corner.TopRightCorner)
+
+            # macOS: the real traffic-light buttons will be inset over the tab
+            # row (see _inset_titlebar_macos). Reserve space at the strip's left
+            # so the first tab clears them — Chrome-style single-row chrome.
+            if sys.platform == "darwin":
+                spacer = QWidget()
+                spacer.setFixedWidth(76)
+                self.tabs.setCornerWidget(spacer, Qt.Corner.TopLeftCorner)
 
             # Middle-click a tab to close it (browser convention).
             self.tabs.tabBar().setChangeCurrentOnDrag(True)
@@ -142,6 +152,33 @@ def run(url: str) -> None:
             if n:
                 self.tabs.setCurrentIndex((self.tabs.currentIndex() + delta) % n)
 
+        # ---- single-row chrome (macOS) -------------------------------------
+        def inset_titlebar_macos(self) -> None:
+            """Make the native macOS title bar transparent + full-size so the
+            real traffic-light buttons sit over the tab row. Runs on Qt's main
+            (GUI) thread, so unlike the old pywebview attempt it can't race the
+            Cocoa layout. No-op off macOS / without pyobjc."""
+            if sys.platform != "darwin":
+                return
+            try:
+                from ctypes import c_void_p
+
+                import objc
+                from AppKit import (
+                    NSWindowStyleMaskFullSizeContentView,
+                    NSWindowTitleHidden,
+                )
+
+                view = objc.objc_object(c_void_p=int(self.winId()))
+                nswindow = view.window()
+                nswindow.setTitlebarAppearsTransparent_(True)
+                nswindow.setTitleVisibility_(NSWindowTitleHidden)
+                nswindow.setStyleMask_(
+                    nswindow.styleMask() | NSWindowStyleMaskFullSizeContentView
+                )
+            except Exception:  # noqa: BLE001 - never break the window over chrome
+                pass
+
         def eventFilter(self, obj, event):  # noqa: N802 (Qt naming)
             from PySide6.QtCore import QEvent
             if obj is self.tabs.tabBar() and event.type() == QEvent.Type.MouseButtonRelease:
@@ -154,4 +191,5 @@ def run(url: str) -> None:
 
     window = Shell()
     window.show()
+    window.inset_titlebar_macos()   # after show(): winId()/NSWindow now exist
     app.exec()

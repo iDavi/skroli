@@ -12,7 +12,12 @@ dependencies = []
 # Lightweight native window (single web view) instead of a browser tab.
 desktop = ["pywebview>=5.0"]
 # Full cross-platform native shell: real OS window + native browser-style tabs.
-native = ["PySide6>=6.6"]
+# On macOS, pyobjc lets us inset the title bar so the real traffic-light buttons
+# share the tab row (Chrome-style single-row chrome).
+native = [
+  "PySide6>=6.6",
+  "pyobjc-framework-Cocoa>=9.0; sys_platform=='darwin'",
+]
 
 [project.scripts]
 skroli = "skroli_app.cli:main"
