@@ -27,46 +27,6 @@ def _asset(name: str) -> bytes:
     return (_ASSETS / name).read_bytes()
 
 
-def _inset_titlebar_macos(window) -> None:
-    """Chrome-style chrome on macOS: make the native title bar transparent and
-    full-size so the OS's real traffic-light buttons sit over our tab strip.
-
-    The previous version crashed because it mutated the NSWindow from a
-    background thread (webview.start's callback). Cocoa is main-thread-only, so
-    here we hook pywebview's ``shown`` event and dispatch the change onto the
-    main run loop via AppHelper.callAfter. No-op off macOS / without pyobjc."""
-    import sys
-
-    if sys.platform != "darwin":
-        return
-    try:
-        from PyObjCTools import AppHelper
-        from AppKit import (
-            NSApplication,
-            NSWindowStyleMaskFullSizeContentView,
-            NSWindowTitleHidden,
-        )
-    except Exception:  # noqa: BLE001 - pyobjc not present
-        return
-
-    def _apply():
-        try:
-            for w in NSApplication.sharedApplication().windows():
-                w.setTitlebarAppearsTransparent_(True)
-                w.setTitleVisibility_(NSWindowTitleHidden)
-                w.setStyleMask_(w.styleMask() | NSWindowStyleMaskFullSizeContentView)
-        except Exception:  # noqa: BLE001 - never take the app down for chrome
-            pass
-
-    def _on_shown():
-        AppHelper.callAfter(_apply)   # marshal onto the Cocoa main thread
-
-    try:
-        window.events.shown += _on_shown
-    except Exception:  # noqa: BLE001
-        pass
-
-
 def _section_form(config, section: Section) -> dict:
     target = getattr(config, section.attr)
     return {
@@ -268,14 +228,13 @@ class SkroliViewer:
             try:
                 import webview  # pywebview
 
-                # Non-frameless window so the OS draws REAL close/minimize/zoom
-                # buttons. On macOS we then inset the title bar (transparent +
-                # full-size content) so those real buttons float over our tab
-                # strip, Chrome-style. That native tweak MUST run on the main
-                # thread — see _inset_titlebar_macos.
+                # Plain native window: the OS draws a real title bar with real
+                # close/minimize/zoom buttons. The tab strip sits just below it.
+                # (Insetting the title bar so the buttons share the tab row hides
+                # the tabs under the title bar via WKWebView — not worth the
+                # native hit-testing it would take to do safely.)
                 threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
-                window = webview.create_window("skroli", url, width=1200, height=900)
-                _inset_titlebar_macos(window)
+                webview.create_window("skroli", url, width=1200, height=900)
                 webview.start()
                 return
             except ImportError:
