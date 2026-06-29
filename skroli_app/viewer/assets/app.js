@@ -200,16 +200,17 @@ function renderTabs(){
     const active = section === 'browse' && t.key === activeKey;
     let icon = '';
     if (t.kind === 'page'){
-      icon = t.loading
+      const inner = t.loading
         ? '<span class="tspin"></span>'
         : '<img class="tfav" src="https://www.google.com/s2/favicons?domain=' + encodeURIComponent(hostOf(t.url)) + '&sz=32" onerror="this.style.visibility=\'hidden\'">';
+      icon = '<span class="ticon">' + inner + '</span>';   // slot only for page tabs
     }
     const label = tabTitle(t);
     const tip = t.url ? label + '\n' + t.url : label;
     h += '<div class="tab' + (active ? ' active' : '') + (t.key === _dragKey ? ' dragging' : '') +
          (t.key === _dropKey ? ' dropbefore' : '') +
          '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(tip) + '">' +
-         '<span class="ticon">' + icon + '</span><span class="tlabel">' + esc(label) + '</span>' +
+         icon + '<span class="tlabel">' + esc(label) + '</span>' +
          '<span class="tclose" data-close="1" title="Close">×</span></div>';
   });
   document.getElementById('tabs').innerHTML = h;
