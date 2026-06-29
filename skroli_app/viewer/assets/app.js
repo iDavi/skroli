@@ -8,6 +8,7 @@ let seq = 0;             // monotonic id for unique tab keys
 const closedStack = [];  // recently closed tabs, for reopen
 
 function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
+function nextTabKey(key){ const i = tabs.findIndex(t => t.key === key); return (i >= 0 && i + 1 < tabs.length) ? tabs[i + 1].key : null; }
 function hostOf(u){ try { return new URL(u).hostname; } catch(_){ return ''; } }
 
 /* frameless window controls (pywebview desktop app) */
@@ -180,7 +181,22 @@ function render(){
   renderTabs();
   saveState();
 }
+function tabTitle(t){
+  // (5) never show a blank tab — fall back to the host, then a generic label.
+  const s = (t.title || '').trim();
+  if (s) return s;
+  if (t.url){ const h = hostOf(t.url); if (h) return h; }
+  return t.kind === 'feed' ? 'Feed' : 'Untitled';
+}
+let _tabSig = '';
 function renderTabs(){
+  // (1)(7) only rebuild when the strip's visible state actually changed, so
+  // favicons don't reload / flicker on every feed update or hover.
+  const sig = tabs.map(t => t.key + '|' + tabTitle(t) + '|' + (t.kind === 'page' ? (t.loading ? 'L' : 'F') + hostOf(t.url) : '') +
+    '|' + (t.key === activeKey && section === 'browse' ? 'A' : '') + '|' + (t.key === _dragKey ? 'D' : '') +
+    '|' + (t.key === _dropKey ? 'O' : '')).join('§') + '#' + section;
+  if (sig === _tabSig){ scrollActiveTabIntoView(); return; }
+  _tabSig = sig;
   let h = '';
   tabs.forEach(t => {
     const active = section === 'browse' && t.key === activeKey;
@@ -188,17 +204,20 @@ function renderTabs(){
     if (t.kind === 'page'){
       icon = t.loading
         ? '<span class="tspin"></span>'
-        : '<img class="tfav" src="https://www.google.com/s2/favicons?domain=' + encodeURIComponent(hostOf(t.url)) + '&sz=32" onerror="this.remove()">';
+        : '<img class="tfav" src="https://www.google.com/s2/favicons?domain=' + encodeURIComponent(hostOf(t.url)) + '&sz=32" onerror="this.style.visibility=\'hidden\'">';
     }
-    const tip = t.url ? t.title + '\n' + t.url : t.title;
+    const label = tabTitle(t);
+    const tip = t.url ? label + '\n' + t.url : label;
     h += '<div class="tab' + (active ? ' active' : '') + (t.key === _dragKey ? ' dragging' : '') +
+         (t.key === _dropKey ? ' dropbefore' : '') +
          '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(tip) + '">' +
-         icon + '<span class="tlabel">' + esc(t.title) + '</span>' +
+         '<span class="ticon">' + icon + '</span><span class="tlabel">' + esc(label) + '</span>' +
          '<span class="tclose" data-close="1" title="Close">×</span></div>';
   });
-  h += '<div class="tabadd" id="tabadd" title="New feed tab (⌘T)">+</div>';
   document.getElementById('tabs').innerHTML = h;
-  // (5) keep the active tab visible in the strip
+  scrollActiveTabIntoView();
+}
+function scrollActiveTabIntoView(){
   const el = document.querySelector('#tabs .tab.active');
   if (el) el.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }
@@ -254,6 +273,13 @@ function showTabMenu(key, x, y){
     '<button data-a="right">Close to the right</button>' +
     '<button data-a="dup">Duplicate</button>';
   m.style.left = x + 'px'; m.style.top = y + 'px';
+  m.style.visibility = 'hidden';
+  document.body.appendChild(m);
+  // (6) clamp inside the viewport so the menu never spills off the right/bottom edge.
+  const r = m.getBoundingClientRect();
+  if (r.right > window.innerWidth) m.style.left = Math.max(0, window.innerWidth - r.width - 4) + 'px';
+  if (r.bottom > window.innerHeight) m.style.top = Math.max(0, window.innerHeight - r.height - 4) + 'px';
+  m.style.visibility = '';
   m.addEventListener('click', ev => {
     const a = ev.target.dataset.a;
     if (a === 'close') closeTab(key);
@@ -262,36 +288,55 @@ function showTabMenu(key, x, y){
     else if (a === 'dup') duplicateTab(key);
     closeTabMenu();
   });
-  document.body.appendChild(m);
 }
 function closeTabMenu(){ const m = document.getElementById('ctxmenu'); if (m) m.remove(); }
 
 let _dragKey = null;
+let _dropKey = null;   // tab the drop indicator sits before (null = end)
 document.addEventListener('DOMContentLoaded', ()=>{
   if (!restore()) newFeed();      // (1) restore session, else open one feed
   const bar = document.getElementById('tabs');
+  const topbar = document.querySelector('.topbar');
+  document.getElementById('tabadd').addEventListener('click', () => newFeed());  // (3) pinned + button
   bar.addEventListener('click', e => {
-    if (e.target.id === 'tabadd'){ newFeed(); return; }
     const tab = e.target.closest('.tab'); if (!tab) return;
     if (e.target.closest('.tclose')) closeTab(tab.dataset.key);
     else { section = 'browse'; activeKey = tab.dataset.key; render(); }
   });
-  bar.addEventListener('auxclick', e => {        // (4) middle-click closes a tab
+  // (8) middle-click on a tab: suppress the OS autoscroll/paste, then close on release.
+  bar.addEventListener('mousedown', e => { if (e.button === 1 && e.target.closest('.tab')) e.preventDefault(); });
+  bar.addEventListener('auxclick', e => {        // middle-click closes a tab
     if (e.button !== 1) return;
     const tab = e.target.closest('.tab'); if (tab){ e.preventDefault(); closeTab(tab.dataset.key); }
   });
-  bar.addEventListener('contextmenu', e => {     // (8) right-click menu
+  bar.addEventListener('contextmenu', e => {     // (6) right-click menu
     const tab = e.target.closest('.tab'); if (!tab) return;
     e.preventDefault(); showTabMenu(tab.dataset.key, e.clientX, e.clientY);
   });
-  bar.addEventListener('dragstart', e => { const t = e.target.closest('.tab'); if (t){ _dragKey = t.dataset.key; renderTabs(); } });
-  bar.addEventListener('dragend', () => { _dragKey = null; renderTabs(); });
-  bar.addEventListener('dragover', e => e.preventDefault());
-  bar.addEventListener('drop', e => {            // (9) drop on a tab, or empty area = end
+  // (4) translate vertical wheel into horizontal scrolling of the strip.
+  bar.addEventListener('wheel', e => {
+    if (e.deltaY === 0) return;
+    const max = bar.scrollWidth - bar.clientWidth;
+    if (max <= 0) return;
+    bar.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
+  // (9) drag-reorder with an insertion indicator; the whole topbar is a drop target
+  // so releasing over the + button or drag space drops at the end.
+  topbar.addEventListener('dragstart', e => { const t = e.target.closest('.tab'); if (t){ _dragKey = t.dataset.key; renderTabs(); } });
+  topbar.addEventListener('dragend', () => { _dragKey = null; _dropKey = null; renderTabs(); });
+  topbar.addEventListener('dragover', e => {
+    if (!_dragKey) return;
     e.preventDefault();
     const t = e.target.closest('.tab');
-    if (_dragKey) reorder(_dragKey, t ? t.dataset.key : null);
-    _dragKey = null;
+    let dropKey = null;
+    if (t){ const r = t.getBoundingClientRect(); dropKey = (e.clientX < r.left + r.width / 2) ? t.dataset.key : nextTabKey(t.dataset.key); }
+    if (dropKey !== _dropKey){ _dropKey = dropKey; renderTabs(); }
+  });
+  topbar.addEventListener('drop', e => {
+    e.preventDefault();
+    if (_dragKey) reorder(_dragKey, _dropKey);
+    _dragKey = null; _dropKey = null;
   });
   document.getElementById('feeds').addEventListener('click', onPostClick);
   document.getElementById('feeds').addEventListener('auxclick', e => { if (e.button === 1) onPostClick(e); });
