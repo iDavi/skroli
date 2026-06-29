@@ -1,12 +1,14 @@
 /* ----- the app is a browser ------------------------------------------------
-   The tab strip holds browsing tabs only: feeds, opened pages, and source
-   "profile" pages. Ingestors / Enhancers are sidebar views, NOT tabs. */
+   Tab strip = browsing tabs only (feeds, opened pages, source pages). Robust:
+   session-persisted, keyboard-driven, reorderable, with per-tab history. */
 let tabs = [];
 let activeKey = null;
 let section = 'browse';   // 'browse' | 'ingestors' | 'enhancers'
-let feedSeq = 0;
+let seq = 0;             // monotonic id for unique tab keys
+const closedStack = [];  // recently closed tabs, for reopen
 
 function activeTab(){ return tabs.find(t => t.key === activeKey) || tabs[0]; }
+function hostOf(u){ try { return new URL(u).hostname; } catch(_){ return ''; } }
 
 /* frameless window controls (pywebview desktop app) */
 function winClose(){ if (window.pywebview) pywebview.api.win_close(); }
@@ -14,6 +16,37 @@ function winMin(){ if (window.pywebview) pywebview.api.win_minimize(); }
 function winZoom(){ if (window.pywebview) pywebview.api.win_zoom(); }
 window.addEventListener('pywebviewready', () => document.body.classList.add('desktop'));
 if (window.pywebview) document.body.classList.add('desktop');
+
+/* ---- (1) session persistence ---- */
+function saveState(){
+  try {
+    localStorage.setItem('skroli.tabs', JSON.stringify({
+      seq, section, activeKey,
+      tabs: tabs.map(t => ({ key:t.key, kind:t.kind, title:t.title, url:t.url,
+                             source:t.source, history:t.history, hidx:t.hidx })),
+    }));
+  } catch(_){}
+}
+function restore(){
+  let s; try { s = JSON.parse(localStorage.getItem('skroli.tabs') || 'null'); } catch(_){ s = null; }
+  if (!s || !Array.isArray(s.tabs) || !s.tabs.length) return false;
+  seq = s.seq || 0; section = s.section || 'browse';
+  s.tabs.forEach(t => { tabs.push(t); mountTab(t); });
+  activeKey = tabs.some(t => t.key === s.activeKey) ? s.activeKey : tabs[0].key;
+  render(); _lastSig = ''; renderFeed();
+  return true;
+}
+function mountTab(t){   // (re)create a tab's DOM container
+  if (t.kind === 'feed') ensureFeedView(t.key);
+  else if (t.kind === 'source') ensureSourceView(t.key, t.source);
+  else if (t.kind === 'page'){
+    const div = document.createElement('div');
+    div.className = 'tabview'; div.dataset.key = t.key;
+    document.getElementById('browser').appendChild(div);
+    if (!t.history) { t.history = [t.url]; t.hidx = 0; }
+    t.loading = true; loadPage(t.key, t.url, div);
+  }
+}
 
 function show(view){      // sidebar: Home goes to the feed; the others are views
   if (view === 'home'){ section = 'browse'; focusOrNewFeed(); }
@@ -31,9 +64,9 @@ function ensureFeedView(key){
     '<div class="posts"><div class="empty">Loading your feed…</div></div>';
   document.getElementById('feeds').appendChild(div);
 }
-function newFeed(){                        // every + opens another feed tab
+function newFeed(){
   section = 'browse';
-  const key = 'feed:' + (++feedSeq);
+  const key = 'feed:' + (++seq);
   tabs.push({ key, kind: 'feed', title: 'Feed' });
   ensureFeedView(key);
   activeKey = key; render();
@@ -51,28 +84,36 @@ function ensureSourceView(key, source){
                   '<div class="posts"><div class="empty">No posts from this source yet.</div></div>';
   document.getElementById('sourceviews').appendChild(div);
 }
-function openSource(source){               // click an avatar/name → that source's posts
+function openSource(source){
   if (!source) return;
   section = 'browse';
-  const key = 'source:' + source;
-  if (!tabs.find(t => t.key === key)){ tabs.push({ key, kind: 'source', title: source, source }); ensureSourceView(key, source); }
+  const exist = tabs.find(t => t.kind === 'source' && t.source === source);
+  if (exist){ activeKey = exist.key; render(); return; }
+  const key = 'source:' + (++seq);
+  tabs.push({ key, kind: 'source', title: source, source });
+  ensureSourceView(key, source);
   activeKey = key; render(); _lastSig = ''; renderFeed();
 }
-function openPage(url, title){
+/* ---- (4) middle/⌘-click → background; (6) per-tab history; (10) dedupe ---- */
+function openPage(url, title, opts){
   if (!url) return;
-  section = 'browse';
-  const key = 'page:' + url;
-  if (!tabs.find(t => t.key === key)){
-    tabs.push({ key, kind: 'page', title: title || url, url });
-    const div = document.createElement('div');
-    div.className = 'tabview'; div.dataset.key = key;
-    div.innerHTML = '<div class="empty">Opening…</div>';
-    document.getElementById('browser').appendChild(div);
-    loadPage(key, url, div);
+  opts = opts || {};
+  const exist = tabs.find(t => t.kind === 'page' && t.url === url);
+  if (exist && !opts.force){
+    if (!opts.background){ section = 'browse'; activeKey = exist.key; render(); }
+    return;
   }
-  activeKey = key;
+  const key = 'page:' + (++seq);
+  const tab = { key, kind: 'page', title: title || url, url, history: [url], hidx: 0, loading: true };
+  tabs.push(tab);
+  const div = document.createElement('div');
+  div.className = 'tabview'; div.dataset.key = key;
+  document.getElementById('browser').appendChild(div);
+  loadPage(key, url, div);
+  if (!opts.background){ section = 'browse'; activeKey = key; }
   render();
 }
+/* ---- (3) reopen-closed stack ---- */
 function closeTab(key){
   const i = tabs.findIndex(t => t.key === key);
   if (i < 0) return;
@@ -80,16 +121,46 @@ function closeTab(key){
   tabs.splice(i, 1);
   const host = { page: '#browser .tabview', feed: '#feeds .feedview', source: '#sourceviews .sourceview' }[t.kind];
   if (host){ const d = document.querySelector(host + '[data-key="' + CSS.escape(key) + '"]'); if (d) d.remove(); }
-  if (!tabs.length){ newFeed(); return; }   // always ≥1 tab
-  if (activeKey === key) activeKey = (tabs[Math.max(0, i - 1)] || tabs[0]).key;
+  closedStack.push({ kind: t.kind, title: t.title, url: t.url, source: t.source, idx: i });
+  if (closedStack.length > 25) closedStack.shift();
+  if (!tabs.length){ newFeed(); return; }
+  if (activeKey === key) activeKey = (tabs[Math.min(i, tabs.length - 1)] || tabs[0]).key;
   render();
 }
+function reopenClosed(){
+  const c = closedStack.pop();
+  if (!c) return;
+  if (c.kind === 'feed') newFeed();
+  else if (c.kind === 'source') openSource(c.source);
+  else openPage(c.url, c.title, { force: true });
+}
+/* ---- (8) context-menu actions ---- */
+function closeOthers(key){ tabs.filter(t => t.key !== key).map(t => t.key).forEach(closeTab); }
+function closeToRight(key){
+  const i = tabs.findIndex(t => t.key === key);
+  tabs.slice(i + 1).map(t => t.key).forEach(closeTab);
+}
+function duplicateTab(key){
+  const t = tabs.find(x => x.key === key); if (!t) return;
+  if (t.kind === 'page') openPage(t.url, t.title, { force: true });
+  else if (t.kind === 'feed') newFeed();
+  else if (t.kind === 'source') openSource(t.source);
+}
+/* ---- (9) reorder with drop-at-end ---- */
 function reorder(fromKey, toKey){
-  const fi = tabs.findIndex(t => t.key === fromKey), ti = tabs.findIndex(t => t.key === toKey);
-  if (fi < 0 || ti < 0 || fi === ti) return;
+  const fi = tabs.findIndex(t => t.key === fromKey);
+  if (fi < 0) return;
   const [moved] = tabs.splice(fi, 1);
+  let ti = toKey ? tabs.findIndex(t => t.key === toKey) : tabs.length;
+  if (ti < 0) ti = tabs.length;
   tabs.splice(ti, 0, moved);
   render();
+}
+function selectIndex(i){ if (tabs[i]){ section = 'browse'; activeKey = tabs[i].key; render(); } }
+function cycleTab(d){
+  const i = tabs.findIndex(t => t.key === activeKey);
+  const n = ((i < 0 ? 0 : i) + d + tabs.length) % tabs.length;
+  selectIndex(n);
 }
 function render(){
   const browse = section === 'browse';
@@ -105,47 +176,99 @@ function render(){
   document.querySelectorAll('#browser .tabview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
   const navSel = section === 'ingestors' ? 1 : section === 'enhancers' ? 2 : 0;
   document.querySelectorAll('.nav .item').forEach((n, i) => n.classList.toggle('active', i === navSel));
-  document.body.classList.toggle('home', kind === 'feed');   // rail only on the feed
+  document.body.classList.toggle('home', kind === 'feed');
   renderTabs();
+  saveState();
 }
 function renderTabs(){
   let h = '';
   tabs.forEach(t => {
     const active = section === 'browse' && t.key === activeKey;
+    let icon = '';
+    if (t.kind === 'page'){
+      icon = t.loading
+        ? '<span class="tspin"></span>'
+        : '<img class="tfav" src="https://www.google.com/s2/favicons?domain=' + encodeURIComponent(hostOf(t.url)) + '&sz=32" onerror="this.remove()">';
+    }
     const tip = t.url ? t.title + '\n' + t.url : t.title;
-    h += '<div class="tab' + (active ? ' active' : '') + '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(tip) + '">' +
-         '<span class="tlabel">' + esc(t.title) + '</span>' +
-         '<span class="tclose" data-close="1">×</span></div>';
+    h += '<div class="tab' + (active ? ' active' : '') + (t.key === _dragKey ? ' dragging' : '') +
+         '" draggable="true" data-key="' + esc(t.key) + '" title="' + esc(tip) + '">' +
+         icon + '<span class="tlabel">' + esc(t.title) + '</span>' +
+         '<span class="tclose" data-close="1" title="Close">×</span></div>';
   });
-  h += '<div class="tabadd" id="tabadd" title="New feed tab">+</div>';
+  h += '<div class="tabadd" id="tabadd" title="New feed tab (⌘T)">+</div>';
   document.getElementById('tabs').innerHTML = h;
+  // (5) keep the active tab visible in the strip
+  const el = document.querySelector('#tabs .tab.active');
+  if (el) el.scrollIntoView({ inline: 'nearest', block: 'nearest' });
 }
+/* ---- (7) loading spinner + (6) history bar ---- */
 function loadPage(key, url, div){
-  // Live page via the same-origin proxy (loads sites that block framing).
+  const tab = tabs.find(t => t.key === key);
+  const canBack = tab && tab.hidx > 0;
+  const canFwd  = tab && tab.history && tab.hidx < tab.history.length - 1;
   div.innerHTML =
-    '<div class="bbar"><a class="act" href="' + esc(url) + '" target="_blank" rel="noopener">open original ↗</a></div>' +
+    '<div class="bbar">' +
+    '<button class="navbtn" data-nav="back" ' + (canBack ? '' : 'disabled') + ' title="Back">◀</button>' +
+    '<button class="navbtn" data-nav="fwd" ' + (canFwd ? '' : 'disabled') + ' title="Forward">▶</button>' +
+    '<button class="navbtn" data-nav="reload" title="Reload">↻</button>' +
+    '<a class="act" href="' + esc(url) + '" target="_blank" rel="noopener">open original ↗</a></div>' +
     '<div class="bcontent"><iframe class="bframe" sandbox="allow-scripts allow-forms" ' +
-    'src="/proxy?url=' + encodeURIComponent(url) + '"></iframe></div>';
+    'onload="tabLoaded(\'' + esc(key) + '\')" src="/proxy?url=' + encodeURIComponent(url) + '"></iframe></div>';
+  if (tab) tab.loading = true;
 }
+function tabLoaded(key){ const t = tabs.find(x => x.key === key); if (t){ t.loading = false; renderTabs(); } }
 function reloadTab(key){
   const tab = tabs.find(t => t.key === key);
   const div = document.querySelector('#browser .tabview[data-key="' + CSS.escape(key) + '"]');
   if (tab && div) loadPage(key, tab.url, div);
 }
-function navigateTab(key, url){ const t = tabs.find(x => x.key === key); if (t){ t.url = url; t.title = url; reloadTab(key); renderTabs(); } }
+function navigateTab(key, url){
+  const t = tabs.find(x => x.key === key); if (!t) return;
+  t.history = (t.history || [t.url]).slice(0, (t.hidx || 0) + 1);
+  t.history.push(url); t.hidx = t.history.length - 1;
+  t.url = url; t.title = url; reloadTab(key); renderTabs(); saveState();
+}
+function goBack(key){ const t = tabs.find(x => x.key === key); if (t && t.hidx > 0){ t.hidx--; t.url = t.history[t.hidx]; reloadTab(key); renderTabs(); saveState(); } }
+function goFwd(key){ const t = tabs.find(x => x.key === key); if (t && t.history && t.hidx < t.history.length - 1){ t.hidx++; t.url = t.history[t.hidx]; reloadTab(key); renderTabs(); saveState(); } }
 
 function onPostClick(e){
   if (e.target.closest('.refreshbtn')){ refresh(e.target.closest('.refreshbtn')); return; }
   const src = e.target.closest('[data-source]');
   if (src){ e.stopPropagation(); openSource(src.dataset.source); return; }
+  const bg = e.metaKey || e.ctrlKey || e.button === 1;   // open in background tab
   const link = e.target.closest('[data-open]');
-  if (link){ e.stopPropagation(); openPage(link.dataset.open, link.dataset.openTitle || ''); return; }
+  if (link){ e.stopPropagation(); openPage(link.dataset.open, link.dataset.openTitle || '', { background: bg }); return; }
   const post = e.target.closest('.post');
-  if (post && post.dataset.url) openPage(post.dataset.url, post.dataset.title);
+  if (post && post.dataset.url) openPage(post.dataset.url, post.dataset.title, { background: bg });
 }
+
+/* ---- (8) tab context menu ---- */
+function showTabMenu(key, x, y){
+  closeTabMenu();
+  const m = document.createElement('div');
+  m.className = 'ctxmenu'; m.id = 'ctxmenu';
+  m.innerHTML =
+    '<button data-a="close">Close</button>' +
+    '<button data-a="others">Close others</button>' +
+    '<button data-a="right">Close to the right</button>' +
+    '<button data-a="dup">Duplicate</button>';
+  m.style.left = x + 'px'; m.style.top = y + 'px';
+  m.addEventListener('click', ev => {
+    const a = ev.target.dataset.a;
+    if (a === 'close') closeTab(key);
+    else if (a === 'others') closeOthers(key);
+    else if (a === 'right') closeToRight(key);
+    else if (a === 'dup') duplicateTab(key);
+    closeTabMenu();
+  });
+  document.body.appendChild(m);
+}
+function closeTabMenu(){ const m = document.getElementById('ctxmenu'); if (m) m.remove(); }
+
 let _dragKey = null;
 document.addEventListener('DOMContentLoaded', ()=>{
-  newFeed();                       // the app opens with one feed tab
+  if (!restore()) newFeed();      // (1) restore session, else open one feed
   const bar = document.getElementById('tabs');
   bar.addEventListener('click', e => {
     if (e.target.id === 'tabadd'){ newFeed(); return; }
@@ -153,16 +276,36 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if (e.target.closest('.tclose')) closeTab(tab.dataset.key);
     else { section = 'browse'; activeKey = tab.dataset.key; render(); }
   });
-  bar.addEventListener('dragstart', e => { const t = e.target.closest('.tab'); if (t) _dragKey = t.dataset.key; });
+  bar.addEventListener('auxclick', e => {        // (4) middle-click closes a tab
+    if (e.button !== 1) return;
+    const tab = e.target.closest('.tab'); if (tab){ e.preventDefault(); closeTab(tab.dataset.key); }
+  });
+  bar.addEventListener('contextmenu', e => {     // (8) right-click menu
+    const tab = e.target.closest('.tab'); if (!tab) return;
+    e.preventDefault(); showTabMenu(tab.dataset.key, e.clientX, e.clientY);
+  });
+  bar.addEventListener('dragstart', e => { const t = e.target.closest('.tab'); if (t){ _dragKey = t.dataset.key; renderTabs(); } });
+  bar.addEventListener('dragend', () => { _dragKey = null; renderTabs(); });
   bar.addEventListener('dragover', e => e.preventDefault());
-  bar.addEventListener('drop', e => {
+  bar.addEventListener('drop', e => {            // (9) drop on a tab, or empty area = end
     e.preventDefault();
     const t = e.target.closest('.tab');
-    if (t && _dragKey) reorder(_dragKey, t.dataset.key);
+    if (_dragKey) reorder(_dragKey, t ? t.dataset.key : null);
     _dragKey = null;
   });
   document.getElementById('feeds').addEventListener('click', onPostClick);
+  document.getElementById('feeds').addEventListener('auxclick', e => { if (e.button === 1) onPostClick(e); });
   document.getElementById('sourceviews').addEventListener('click', onPostClick);
+  document.getElementById('sourceviews').addEventListener('auxclick', e => { if (e.button === 1) onPostClick(e); });
+  document.getElementById('browser').addEventListener('click', e => {   // (6) history buttons
+    const nb = e.target.closest('.navbtn'); if (!nb) return;
+    const tv = e.target.closest('.tabview'); const key = tv && tv.dataset.key; if (!key) return;
+    if (nb.dataset.nav === 'back') goBack(key);
+    else if (nb.dataset.nav === 'fwd') goFwd(key);
+    else reloadTab(key);
+  });
+  document.addEventListener('click', closeTabMenu);
+  document.addEventListener('keydown', onKey);   // (2) shortcuts
   // Links inside a proxied (live) page post back here to navigate in the same tab.
   window.addEventListener('message', e => {
     const nav = e.data && e.data.skroliNav;
@@ -174,6 +317,17 @@ document.addEventListener('DOMContentLoaded', ()=>{
     if (key) navigateTab(key, nav);
   });
 });
+/* ---- (2) keyboard shortcuts ---- */
+function onKey(e){
+  if (e.ctrlKey && e.key === 'Tab'){ e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); return; }
+  const mod = e.metaKey || e.ctrlKey; if (!mod) return;
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
+  const k = e.key.toLowerCase();
+  if (k === 't' && e.shiftKey){ e.preventDefault(); reopenClosed(); }
+  else if (k === 't'){ e.preventDefault(); newFeed(); }
+  else if (k === 'w'){ e.preventDefault(); closeTab(activeKey); }
+  else if (/^[1-9]$/.test(e.key)){ e.preventDefault(); selectIndex(e.key === '9' ? tabs.length - 1 : (+e.key - 1)); }
+}
 
 /* ----- live feed over WebSocket ----- */
 const items = new Map();
