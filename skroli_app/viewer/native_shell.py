@@ -25,7 +25,7 @@ QTabWidget::pane { border: 0; top: 0; }
 QTabBar { background: #4f4b3b; qproperty-drawBase: 0; }
 QTabBar::tab {
   background: #4f4b3b; color: #d9d6c8;
-  height: 44px; min-width: 92px; max-width: 220px; padding: 0 14px;
+  height: 44px; min-width: 110px; max-width: 220px; padding: 0 8px 0 14px;
   border: 0; border-right: 1px solid #605b46;
   font-family: "Libertinus Math", "Libertinus Serif", Georgia, serif;
   font-size: 14px;
@@ -35,7 +35,7 @@ QTabBar::tab:selected {
   background: #56523f; color: #f5f3ec;
   border-bottom: 2px solid #c9b27a;
 }
-QTabBar::close-button { subcontrol-position: right; margin-left: 6px; }
+QTabBar::close-button { subcontrol-position: right; margin: 0 6px 0 4px; }
 QToolButton {
   background: transparent; color: #959389; border: 0;
   font-size: 20px; padding: 4px 14px;
@@ -203,8 +203,24 @@ def run(url: str) -> None:
                 nswindow.setStyleMask_(
                     nswindow.styleMask() | NSWindowStyleMaskFullSizeContentView
                 )
+                # Content covers the native title-bar drag area, so let the
+                # window be dragged by its background (the empty olive strip).
+                nswindow.setMovableByWindowBackground_(True)
             except Exception:  # noqa: BLE001 - never break the window over chrome
                 pass
+
+        def changeEvent(self, event):  # noqa: N802 (Qt naming)
+            # Zoom/maximize resets the NSWindow style mask, which brings the
+            # native dark title bar back — re-apply the inset whenever the
+            # window state changes.
+            from PySide6.QtCore import QEvent, QTimer
+
+            super().changeEvent(event)
+            if (
+                sys.platform == "darwin"
+                and event.type() == QEvent.Type.WindowStateChange
+            ):
+                QTimer.singleShot(0, self.inset_titlebar_macos)
 
         def eventFilter(self, obj, event):  # noqa: N802 (Qt naming)
             from PySide6.QtCore import QEvent
