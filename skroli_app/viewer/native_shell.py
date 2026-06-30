@@ -94,20 +94,32 @@ def run(url: str) -> None:
     profile = QWebEngineProfile("skroli", app)   # shared cookies/cache/logins
 
     class DragBar(QWidget):
-        """The empty stretch of the top row; dragging it moves the window
-        natively, double-click maximizes."""
+        """The empty stretch of the top row; dragging it moves the window,
+        double-click maximizes. Uses a manual cursor-delta move (startSystemMove
+        proved unreliable for this frameless window), with a native fallback."""
 
         def __init__(self, shell):
             super().__init__()
             self.setObjectName("dragbar")
             self._shell = shell
+            self._press = None       # global cursor pos when the drag started
+            self._origin = None      # window top-left when the drag started
 
         def mousePressEvent(self, event):  # noqa: N802 (Qt naming)
             if event.button() == Qt.MouseButton.LeftButton:
-                handle = self._shell.windowHandle()
-                if handle is not None:
-                    handle.startSystemMove()
+                self._press = event.globalPosition().toPoint()
+                self._origin = self._shell.frameGeometry().topLeft()
                 event.accept()
+
+        def mouseMoveEvent(self, event):  # noqa: N802
+            if self._press is not None:
+                delta = event.globalPosition().toPoint() - self._press
+                self._shell.move(self._origin + delta)
+                event.accept()
+
+        def mouseReleaseEvent(self, event):  # noqa: N802
+            self._press = None
+            self._origin = None
 
         def mouseDoubleClickEvent(self, event):  # noqa: N802
             self._shell.toggle_max()
