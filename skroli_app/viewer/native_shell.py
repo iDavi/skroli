@@ -73,7 +73,7 @@ def run(url: str) -> None:
     closed. Raises ImportError if PySide6 isn't installed."""
     import sys
 
-    from PySide6.QtCore import QEvent, QUrl, Qt
+    from PySide6.QtCore import QEvent, QRect, QUrl, Qt
     from PySide6.QtGui import QKeySequence, QShortcut
     from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -81,8 +81,10 @@ def run(url: str) -> None:
         QApplication,
         QHBoxLayout,
         QMainWindow,
+        QProxyStyle,
         QPushButton,
         QStackedWidget,
+        QStyle,
         QTabBar,
         QToolButton,
         QVBoxLayout,
@@ -93,6 +95,17 @@ def run(url: str) -> None:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyleSheet(_QSS)
     profile = QWebEngineProfile("skroli", app)   # shared cookies/cache/logins
+
+    RESIZE_MARGIN = 6   # px of grabbable border around the content for resizing
+
+    class CloseRightStyle(QProxyStyle):
+        """Force tab close buttons to the right edge on every platform (macOS
+        defaults them to the left, where they collide with the traffic lights)."""
+
+        def styleHint(self, hint, opt=None, widget=None, ret=None):  # noqa: N802
+            if hint == QStyle.StyleHint.SH_TabBar_CloseButtonPosition:
+                return QTabBar.ButtonPosition.RightSide.value
+            return super().styleHint(hint, opt, widget, ret)
 
     class DragBar(QWidget):
         """The empty stretch of the top row; dragging it moves the window,
@@ -174,6 +187,9 @@ def run(url: str) -> None:
             # --- tab bar (standalone, paired with a stacked content area) ---
             self.tabbar = QTabBar()
             self.tabbar.setObjectName("tabbar")
+            self._tabstyle = CloseRightStyle()       # keep a ref (not GC'd)
+            self._tabstyle.setParent(self.tabbar)
+            self.tabbar.setStyle(self._tabstyle)
             self.tabbar.setTabsClosable(True)
             self.tabbar.setMovable(True)
             self.tabbar.setExpanding(False)
@@ -207,13 +223,27 @@ def run(url: str) -> None:
             if not is_mac:
                 row.addWidget(self._win_controls())
 
+            # The web view's surface swallows mouse events, so leave a thin
+            # border of plain olive around it that the window can be resized by.
+            content = QWidget()
+            cl = QVBoxLayout(content)
+            cl.setContentsMargins(RESIZE_MARGIN, 0, RESIZE_MARGIN, RESIZE_MARGIN)
+            cl.setSpacing(0)
+            cl.addWidget(self.stack)
+
             central = QWidget()
             col = QVBoxLayout(central)
             col.setContentsMargins(0, 0, 0, 0)
             col.setSpacing(0)
             col.addWidget(top)
-            col.addWidget(self.stack, 1)
+            col.addWidget(content, 1)
             self.setCentralWidget(central)
+
+            # manual edge-resize (frameless windows get none for free)
+            self._rz_edges = None
+            self._rz_geo = None
+            self._rz_pos = None
+            QApplication.instance().installEventFilter(self)
 
             self._wire_shortcuts()
             self.new_home_tab(focus=True)
@@ -318,9 +348,83 @@ def run(url: str) -> None:
             if n:
                 self.tabbar.setCurrentIndex((self.tabbar.currentIndex() + delta) % n)
 
+        # ---- manual edge-resize -------------------------------------------
+        def _edges_at(self, gp):
+            """Which window edges (left/right/bottom) the global point is near."""
+            edges = Qt.Edge(0)
+            if self.isMaximized() or self.isFullScreen():
+                return edges
+            r = self.geometry()
+            if not r.adjusted(-RESIZE_MARGIN, -RESIZE_MARGIN,
+                              RESIZE_MARGIN, RESIZE_MARGIN).contains(gp):
+                return edges
+            m = RESIZE_MARGIN
+            if abs(gp.x() - r.left()) <= m:
+                edges |= Qt.Edge.LeftEdge
+            if abs(gp.x() - r.right()) <= m:
+                edges |= Qt.Edge.RightEdge
+            if abs(gp.y() - r.bottom()) <= m:   # no top edge: it's the tab row
+                edges |= Qt.Edge.BottomEdge
+            return edges
+
+        def _cursor_for(self, edges):
+            le, re = Qt.Edge.LeftEdge, Qt.Edge.RightEdge
+            be = Qt.Edge.BottomEdge
+            if (edges & le and edges & be):
+                return Qt.CursorShape.SizeBDiagCursor
+            if (edges & re and edges & be):
+                return Qt.CursorShape.SizeFDiagCursor
+            if edges & (le | re):
+                return Qt.CursorShape.SizeHorCursor
+            if edges & be:
+                return Qt.CursorShape.SizeVerCursor
+            return Qt.CursorShape.ArrowCursor
+
+        def _do_resize(self, gp):
+            g = QRect(self._rz_geo)
+            d = gp - self._rz_pos
+            e = self._rz_edges
+            if e & Qt.Edge.LeftEdge:
+                g.setLeft(g.left() + d.x())
+            if e & Qt.Edge.RightEdge:
+                g.setRight(g.right() + d.x())
+            if e & Qt.Edge.BottomEdge:
+                g.setBottom(g.bottom() + d.y())
+            mn = self.minimumSize()
+            if g.width() < mn.width():
+                if e & Qt.Edge.LeftEdge:
+                    g.setLeft(g.right() - mn.width())
+                else:
+                    g.setRight(g.left() + mn.width())
+            if g.height() < mn.height():
+                g.setBottom(g.top() + mn.height())
+            self.setGeometry(g)
+
         def eventFilter(self, obj, event):  # noqa: N802
+            et = event.type()
+            if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                edges = self._edges_at(event.globalPosition().toPoint())
+                if edges:
+                    self._rz_edges = edges
+                    self._rz_geo = QRect(self.geometry())
+                    self._rz_pos = event.globalPosition().toPoint()
+                    return True
+            elif et == QEvent.Type.MouseMove:
+                if self._rz_edges:
+                    self._do_resize(event.globalPosition().toPoint())
+                    return True
+                if event.buttons() == Qt.MouseButton.NoButton:
+                    edges = self._edges_at(event.globalPosition().toPoint())
+                    if edges:
+                        self.setCursor(self._cursor_for(edges))
+                    else:
+                        self.unsetCursor()
+            elif et == QEvent.Type.MouseButtonRelease and self._rz_edges:
+                self._rz_edges = None
+                return True
+
             if (obj is self.tabbar
-                    and event.type() == QEvent.Type.MouseButtonRelease
+                    and et == QEvent.Type.MouseButtonRelease
                     and event.button() == Qt.MouseButton.MiddleButton):
                 i = self.tabbar.tabAt(event.position().toPoint())
                 if i >= 0:
@@ -328,23 +432,6 @@ def run(url: str) -> None:
                     return True
             return super().eventFilter(obj, event)
 
-        # ---- macOS: keep a borderless window edge-resizable -----------------
-        def enable_macos_resize(self) -> None:
-            if not is_mac:
-                return
-            try:
-                from ctypes import c_void_p
-
-                import objc
-                from AppKit import NSWindowStyleMaskResizable
-
-                view = objc.objc_object(c_void_p=int(self.winId()))
-                nswindow = view.window()
-                nswindow.setStyleMask_(nswindow.styleMask() | NSWindowStyleMaskResizable)
-            except Exception:  # noqa: BLE001 - resize is a nicety, never crash
-                pass
-
     window = Shell()
     window.show()
-    window.enable_macos_resize()   # after show(): the NSWindow exists
     app.exec()
