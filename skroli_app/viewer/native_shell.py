@@ -131,6 +131,43 @@ def run(url: str) -> None:
         def mouseDoubleClickEvent(self, event):  # noqa: N802
             self._shell.toggle_max()
 
+    class ResizeFrame(QWidget):
+        """Holds the web view with a thin border margin; the margin (the only
+        part not covered by the event-swallowing web surface) resizes the window.
+        Uses local mouse events — no app-wide event filter (that crashed with
+        QtWebEngine)."""
+
+        def __init__(self, shell):
+            super().__init__()
+            self._shell = shell
+            self.setMouseTracking(True)
+
+        def mousePressEvent(self, event):  # noqa: N802
+            if event.button() == Qt.MouseButton.LeftButton:
+                edges = self._shell._edges_at(event.globalPosition().toPoint())
+                if edges:
+                    self._shell._begin_resize(edges, event.globalPosition().toPoint())
+                    event.accept()
+                    return
+            super().mousePressEvent(event)
+
+        def mouseMoveEvent(self, event):  # noqa: N802
+            if self._shell._rz_edges:
+                self._shell._do_resize(event.globalPosition().toPoint())
+                event.accept()
+                return
+            edges = self._shell._edges_at(event.globalPosition().toPoint())
+            self.setCursor(self._shell._cursor_for(edges) if edges
+                           else Qt.CursorShape.ArrowCursor)
+            super().mouseMoveEvent(event)
+
+        def mouseReleaseEvent(self, event):  # noqa: N802
+            if self._shell._rz_edges:
+                self._shell._rz_edges = None
+                event.accept()
+                return
+            super().mouseReleaseEvent(event)
+
     class MacLights(QWidget):
         """macOS traffic-light look-alikes. The ×/–/+ glyphs appear only while
         the cursor is over the group, mirroring the real controls."""
@@ -214,9 +251,14 @@ def run(url: str) -> None:
             if not is_mac:
                 row.addWidget(self._win_controls())
 
+            # manual edge-resize state (frameless windows get none for free)
+            self._rz_edges = None
+            self._rz_geo = None
+            self._rz_pos = None
+
             # The web view's surface swallows mouse events, so leave a thin
             # border of plain olive around it that the window can be resized by.
-            content = QWidget()
+            content = ResizeFrame(self)
             cl = QVBoxLayout(content)
             cl.setContentsMargins(RESIZE_MARGIN, 0, RESIZE_MARGIN, RESIZE_MARGIN)
             cl.setSpacing(0)
@@ -229,12 +271,6 @@ def run(url: str) -> None:
             col.addWidget(top)
             col.addWidget(content, 1)
             self.setCentralWidget(central)
-
-            # manual edge-resize (frameless windows get none for free)
-            self._rz_edges = None
-            self._rz_geo = None
-            self._rz_pos = None
-            QApplication.instance().installEventFilter(self)
 
             self._wire_shortcuts()
             self.new_home_tab(focus=True)
@@ -389,6 +425,11 @@ def run(url: str) -> None:
                 return Qt.CursorShape.SizeVerCursor
             return Qt.CursorShape.ArrowCursor
 
+        def _begin_resize(self, edges, gp):
+            self._rz_edges = edges
+            self._rz_geo = QRect(self.geometry())
+            self._rz_pos = gp
+
         def _do_resize(self, gp):
             g = QRect(self._rz_geo)
             d = gp - self._rz_pos
@@ -410,30 +451,8 @@ def run(url: str) -> None:
             self.setGeometry(g)
 
         def eventFilter(self, obj, event):  # noqa: N802
-            et = event.type()
-            if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                edges = self._edges_at(event.globalPosition().toPoint())
-                if edges:
-                    self._rz_edges = edges
-                    self._rz_geo = QRect(self.geometry())
-                    self._rz_pos = event.globalPosition().toPoint()
-                    return True
-            elif et == QEvent.Type.MouseMove:
-                if self._rz_edges:
-                    self._do_resize(event.globalPosition().toPoint())
-                    return True
-                if event.buttons() == Qt.MouseButton.NoButton:
-                    edges = self._edges_at(event.globalPosition().toPoint())
-                    if edges:
-                        self.setCursor(self._cursor_for(edges))
-                    else:
-                        self.unsetCursor()
-            elif et == QEvent.Type.MouseButtonRelease and self._rz_edges:
-                self._rz_edges = None
-                return True
-
             if (obj is self.tabbar
-                    and et == QEvent.Type.MouseButtonRelease
+                    and event.type() == QEvent.Type.MouseButtonRelease
                     and event.button() == Qt.MouseButton.MiddleButton):
                 i = self.tabbar.tabAt(event.position().toPoint())
                 if i >= 0:
