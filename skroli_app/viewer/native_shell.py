@@ -40,7 +40,11 @@ QTabBar#tabbar::tab:hover { background: #56523f; }
 QTabBar#tabbar::tab:selected {
   background: #56523f; color: #f5f3ec; border-bottom: 2px solid #c9b27a;
 }
-QTabBar#tabbar::close-button { subcontrol-position: right; margin: 0 6px 0 4px; }
+QToolButton#tclose {
+  background: transparent; border: 0; color: #959389;
+  font-size: 15px; padding: 0 2px; margin-left: 4px;
+}
+QToolButton#tclose:hover { color: #f5f3ec; }
 
 QToolButton#plus {
   background: transparent; color: #959389; border: 0;
@@ -81,10 +85,8 @@ def run(url: str) -> None:
         QApplication,
         QHBoxLayout,
         QMainWindow,
-        QProxyStyle,
         QPushButton,
         QStackedWidget,
-        QStyle,
         QTabBar,
         QToolButton,
         QVBoxLayout,
@@ -97,15 +99,6 @@ def run(url: str) -> None:
     profile = QWebEngineProfile("skroli", app)   # shared cookies/cache/logins
 
     RESIZE_MARGIN = 6   # px of grabbable border around the content for resizing
-
-    class CloseRightStyle(QProxyStyle):
-        """Force tab close buttons to the right edge on every platform (macOS
-        defaults them to the left, where they collide with the traffic lights)."""
-
-        def styleHint(self, hint, opt=None, widget=None, ret=None):  # noqa: N802
-            if hint == QStyle.StyleHint.SH_TabBar_CloseButtonPosition:
-                return QTabBar.ButtonPosition.RightSide.value
-            return super().styleHint(hint, opt, widget, ret)
 
     class DragBar(QWidget):
         """The empty stretch of the top row; dragging it moves the window,
@@ -187,16 +180,14 @@ def run(url: str) -> None:
             # --- tab bar (standalone, paired with a stacked content area) ---
             self.tabbar = QTabBar()
             self.tabbar.setObjectName("tabbar")
-            self._tabstyle = CloseRightStyle()       # keep a ref (not GC'd)
-            self._tabstyle.setParent(self.tabbar)
-            self.tabbar.setStyle(self._tabstyle)
-            self.tabbar.setTabsClosable(True)
+            # We attach our own close button on the RIGHT of each tab (macOS Qt
+            # would otherwise put the built-in one on the left, by the lights).
+            self.tabbar.setTabsClosable(False)
             self.tabbar.setMovable(True)
             self.tabbar.setExpanding(False)
             self.tabbar.setDrawBase(False)
             self.tabbar.setElideMode(Qt.TextElideMode.ElideRight)
             self.tabbar.currentChanged.connect(self._on_current)
-            self.tabbar.tabCloseRequested.connect(self.close_tab)
             self.tabbar.tabMoved.connect(self._on_moved)
             self.tabbar.installEventFilter(self)   # middle-click closes a tab
 
@@ -280,10 +271,27 @@ def run(url: str) -> None:
             view.iconChanged.connect(lambda i, v=view: self._set_icon(v, i))
             return view
 
+        def _attach_close(self, index: int) -> None:
+            btn = QToolButton()
+            btn.setObjectName("tclose")
+            btn.setText("×")
+            btn.setToolTip("Close tab")
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, b=btn: self._close_for_button(b))
+            self.tabbar.setTabButton(index, QTabBar.ButtonPosition.RightSide, btn)
+
+        def _close_for_button(self, btn) -> None:
+            for i in range(self.tabbar.count()):
+                if self.tabbar.tabButton(i, QTabBar.ButtonPosition.RightSide) is btn:
+                    self.close_tab(i)
+                    return
+
         def add_tab(self, focus: bool = True) -> QWebEngineView:
             view = self._new_view()
             idx = self.stack.addWidget(view)
             self.tabbar.addTab("Loading…")
+            self._attach_close(idx)
             if focus:
                 self.tabbar.setCurrentIndex(idx)
             return view
@@ -292,6 +300,7 @@ def run(url: str) -> None:
             view = self._new_view()
             idx = self.stack.addWidget(view)
             self.tabbar.addTab("Feed")
+            self._attach_close(idx)
             view.load(QUrl(url + "/?shell=1"))
             if focus:
                 self.tabbar.setCurrentIndex(idx)
