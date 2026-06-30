@@ -22,6 +22,9 @@ from .storage import Storage
 from .stream import Broadcaster, Client
 
 
+_READY = json.dumps({"type": "ready"})
+
+
 def item_to_dict(it: Item) -> dict:
     """The shape the browser receives over the WebSocket."""
     body = it.body or ""
@@ -58,6 +61,10 @@ class Engine:
         self.enhancers = enhancers
         self.broadcaster = broadcaster
         self._queue: queue.Queue[list[Item]] = queue.Queue()
+        # Cached "items" payload for new connections — recomputed lazily only
+        # after the data changes, so opening tabs / reconnecting is cheap.
+        self._snapshot_lock = threading.Lock()
+        self._snapshot_json: str | None = None
         self._worker = threading.Thread(target=self._enhance_loop, daemon=True)
         self._worker.start()
 
@@ -81,6 +88,7 @@ class Engine:
                 self.broadcaster.publish(
                     {"type": "items", "items": [item_to_dict(i) for i in items]}
                 )
+                self._invalidate_snapshot()  # new items → cached payload is stale
             except Exception as exc:  # noqa: BLE001 - keep the worker alive across errors
                 print(f"  ! processing batch failed: {exc}")
 
@@ -111,6 +119,7 @@ class Engine:
         valid = self._valid_origins()
         # Drop anything from sources that were removed from the config.
         self.storage.prune_sources(valid)
+        self._invalidate_snapshot()
         self.broadcaster.publish({"type": "status", "fetching": True})
         threads = [
             threading.Thread(target=self._fetch_one, args=(ing,), daemon=True)
@@ -123,6 +132,7 @@ class Engine:
             for t in threads:
                 t.join()
             self.storage.prune(self.config.runtime.retention_hours)
+            self._invalidate_snapshot()
             # Tell clients which origins are still valid so they can drop the rest.
             self.broadcaster.publish(
                 {"type": "status", "fetching": False, "origins": sorted(valid)}
@@ -143,9 +153,25 @@ class Engine:
         items = self._enhance(self.storage.load_recent(self.config.runtime.retention_hours))
         return len(items)
 
+    # --- snapshot cache for new connections ---------------------------------
+    def _invalidate_snapshot(self) -> None:
+        with self._snapshot_lock:
+            self._snapshot_json = None
+
+    def _snapshot(self) -> str:
+        """The current feed as a ready-to-send "items" frame, recomputed only
+        when the data has changed since the last build."""
+        with self._snapshot_lock:
+            if self._snapshot_json is None:
+                items = self._enhance(
+                    self.storage.load_recent(self.config.runtime.retention_hours)
+                )
+                self._snapshot_json = json.dumps(
+                    {"type": "items", "items": [item_to_dict(i) for i in items]}
+                )
+            return self._snapshot_json
+
     # --- a new viewer connected: send what we already have ------------------
     def send_cached(self, client: Client) -> None:
-        items = self.storage.load_recent(self.config.runtime.retention_hours)
-        items = self._enhance(items)
-        client.send(json.dumps({"type": "items", "items": [item_to_dict(i) for i in items]}))
-        client.send(json.dumps({"type": "ready"}))
+        client.send(self._snapshot())   # cached: no DB read / re-enhance per connect
+        client.send(_READY)
