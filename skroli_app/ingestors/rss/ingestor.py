@@ -20,6 +20,7 @@ import json
 import re
 import urllib.error
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
@@ -270,16 +271,27 @@ class RssIngestor:
             rss = fetch(f"https://www.reddit.com/r/{name}/.rss")
             return self._parse(rss, label, json_url, origin)
 
+    def _fetch_source(self, src: tuple[str, str, str, str]) -> list[Item]:
+        kind, label, url, origin = src
+        try:
+            if kind == "reddit":
+                return self._fetch_reddit(label, url, origin)
+            return self._parse(fetch(url), label, url, origin)
+        except Exception as exc:  # noqa: BLE001 - one bad feed shouldn't stop the rest
+            print(f"  ! feed failed ({label or url}): {exc}")
+            return []
+
     def fetch(self) -> list[Item]:
         if not self._config.enabled:
             return []
+        sources = self._sources()
+        if not sources:
+            return []
+        # Fetch sources concurrently — the fetcher throttles per domain, so this
+        # only overlaps requests to *different* hosts (same-host stays serialized
+        # and rate-limited). Turns a serial sum of latencies into ~the slowest.
         items: list[Item] = []
-        for kind, label, url, origin in self._sources():
-            try:
-                if kind == "reddit":
-                    items.extend(self._fetch_reddit(label, url, origin))
-                else:
-                    items.extend(self._parse(fetch(url), label, url, origin))
-            except Exception as exc:  # noqa: BLE001 - one bad feed shouldn't stop the rest
-                print(f"  ! feed failed ({label or url}): {exc}")
+        with ThreadPoolExecutor(max_workers=min(8, len(sources))) as pool:
+            for result in pool.map(self._fetch_source, sources):
+                items.extend(result)
         return items
