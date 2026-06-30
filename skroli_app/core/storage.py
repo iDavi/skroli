@@ -81,46 +81,45 @@ class Storage:
         self._db.commit()
 
     def add_new(self, items: list[Item]) -> int:
-        """Insert items not seen before (by id). Returns how many were new."""
+        """Insert items, upserting ones we've seen. Returns how many were new.
+
+        A single ``ON CONFLICT`` upsert per item (batched with executemany)
+        replaces the old insert-then-update pair: for already-seen items it
+        refreshes the volatile bits — meta (votes/points drift) and an image
+        that's newly available — without disturbing first_seen / saved.
+        """
+        if not items:
+            return 0
         now = utcnow().timestamp()
-        new = 0
+        rows = [
+            (
+                it.id, it.source, it.url, it.title, it.body, it.author, it.image,
+                json.dumps(it.meta or {}), it.published_at.timestamp(), now,
+            )
+            for it in items
+        ]
+        ids = [it.id for it in items]
         with self._lock:
-            for it in items:
-                meta_json = json.dumps(it.meta or {})
-                cur = self._db.execute(
-                    """
-                    INSERT OR IGNORE INTO items
-                        (id, source, url, title, body, author, image, meta, published_at, first_seen)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        it.id,
-                        it.source,
-                        it.url,
-                        it.title,
-                        it.body,
-                        it.author,
-                        it.image,
-                        meta_json,
-                        it.published_at.timestamp(),
-                        now,
-                    ),
+            placeholders = ",".join("?" * len(ids))
+            existing = {
+                r[0] for r in self._db.execute(
+                    f"SELECT id FROM items WHERE id IN ({placeholders})", ids
                 )
-                new += cur.rowcount
-                # For items we've already seen, refresh the volatile bits without
-                # touching first_seen / saved: meta (votes/points change over time)
-                # and an image if one is now available but wasn't before.
-                if cur.rowcount == 0:
-                    self._db.execute(
-                        "UPDATE items SET meta = ? WHERE id = ?", (meta_json, it.id)
-                    )
-                    if it.image:
-                        self._db.execute(
-                            "UPDATE items SET image = ? WHERE id = ? AND image = ''",
-                            (it.image, it.id),
-                        )
+            }
+            self._db.executemany(
+                """
+                INSERT INTO items
+                    (id, source, url, title, body, author, image, meta, published_at, first_seen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    meta = excluded.meta,
+                    image = CASE WHEN items.image = '' AND excluded.image <> ''
+                                 THEN excluded.image ELSE items.image END
+                """,
+                rows,
+            )
             self._db.commit()
-        return new
+        return sum(1 for i in ids if i not in existing)
 
     def load_recent(self, retention_hours: int) -> list[Item]:
         """All items first seen within the retention window, plus any saved."""
