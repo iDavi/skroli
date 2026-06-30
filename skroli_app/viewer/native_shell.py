@@ -48,14 +48,15 @@ QToolButton#plus {
 }
 QToolButton#plus:hover { background: #56523f; color: #f5f3ec; }
 
-/* macOS traffic-light buttons (we draw them; frameless removes the real ones) */
+/* macOS traffic-light buttons (frameless removes the real ones, so these are
+   pixel look-alikes: same colors/size, and ×/–/+ glyphs show on hover) */
 #macclose, #macmin, #maczoom {
   border: 0; min-width: 12px; max-width: 12px; min-height: 12px; max-height: 12px;
-  border-radius: 6px;
+  border-radius: 6px; font-size: 9px; font-weight: bold;
 }
-#macclose { background: #ff5f57; }
-#macmin   { background: #febc2e; }
-#maczoom  { background: #28c840; }
+#macclose { background: #ff5f57; color: rgba(74,0,0,0.55); }
+#macmin   { background: #febc2e; color: rgba(89,55,0,0.55); }
+#maczoom  { background: #28c840; color: rgba(0,52,0,0.55); }
 
 /* Windows / Linux window buttons */
 #winmin, #winmax, #winclose {
@@ -124,6 +125,33 @@ def run(url: str) -> None:
         def mouseDoubleClickEvent(self, event):  # noqa: N802
             self._shell.toggle_max()
 
+    class MacLights(QWidget):
+        """macOS traffic-light look-alikes. The ×/–/+ glyphs appear only while
+        the cursor is over the group, mirroring the real controls."""
+
+        def __init__(self, shell):
+            super().__init__()
+            self.setObjectName("maclights")
+            lay = QHBoxLayout(self)
+            lay.setContentsMargins(13, 0, 10, 0)
+            lay.setSpacing(8)
+            self._close = shell._btn("macclose", "Close", shell.close)
+            self._min = shell._btn("macmin", "Minimize", shell.showMinimized)
+            self._zoom = shell._btn("maczoom", "Zoom", shell.toggle_max)
+            for b in (self._close, self._min, self._zoom):
+                lay.addWidget(b)
+
+        def enterEvent(self, event):  # noqa: N802
+            self._close.setText("×")   # ×
+            self._min.setText("–")     # –
+            self._zoom.setText("+")
+            super().enterEvent(event)
+
+        def leaveEvent(self, event):  # noqa: N802
+            for b in (self._close, self._min, self._zoom):
+                b.setText("")
+            super().leaveEvent(event)
+
     class ShellPage(QWebEnginePage):
         """Routes window.open / target=_blank / modified clicks to a new tab."""
 
@@ -172,7 +200,7 @@ def run(url: str) -> None:
             row.setContentsMargins(0, 0, 0, 0)
             row.setSpacing(0)
             if is_mac:
-                row.addWidget(self._mac_lights())
+                row.addWidget(MacLights(self))
             row.addWidget(self.tabbar)
             row.addWidget(plus)
             row.addWidget(DragBar(self), 1)
@@ -199,17 +227,6 @@ def run(url: str) -> None:
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(slot)
             return b
-
-        def _mac_lights(self):
-            w = QWidget()
-            w.setObjectName("maclights")
-            lay = QHBoxLayout(w)
-            lay.setContentsMargins(13, 0, 10, 0)
-            lay.setSpacing(8)
-            lay.addWidget(self._btn("macclose", "Close", self.close))
-            lay.addWidget(self._btn("macmin", "Minimize", self.showMinimized))
-            lay.addWidget(self._btn("maczoom", "Zoom", self.toggle_max))
-            return w
 
         def _win_controls(self):
             w = QWidget()
