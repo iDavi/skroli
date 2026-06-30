@@ -217,10 +217,14 @@ def run(url: str) -> None:
             super().leaveEvent(event)
 
     class ShellPage(QWebEnginePage):
-        """Routes window.open / target=_blank / modified clicks to a new tab."""
+        """Routes window.open / target=_blank / modified clicks to a new tab.
 
-        def __init__(self, shell):
-            super().__init__(profile, shell)
+        Parented to its *view* (not the window) so closing a tab actually frees
+        the page and its render process — otherwise every closed tab leaks a
+        whole Chromium page and the app eventually crashes."""
+
+        def __init__(self, shell, view):
+            super().__init__(profile, view)
             self._shell = shell
 
         def createWindow(self, win_type):  # noqa: N802
@@ -322,7 +326,7 @@ def run(url: str) -> None:
         # ---- tabs ----------------------------------------------------------
         def _new_view(self) -> QWebEngineView:
             view = QWebEngineView()
-            view.setPage(ShellPage(self))
+            view.setPage(ShellPage(self, view))   # page owned by the view
             view.titleChanged.connect(lambda t, v=view: self._set_title(v, t))
             view.iconChanged.connect(lambda i, v=view: self._set_icon(v, i))
             return view
@@ -367,6 +371,12 @@ def run(url: str) -> None:
             self.tabbar.removeTab(index)
             if view is not None:
                 self.stack.removeWidget(view)
+                # Tear the page down explicitly so its render process is released
+                # promptly (stop loading, drop the page, then free the view).
+                page = view.page()
+                if page is not None:
+                    page.deleteLater()
+                view.setParent(None)
                 view.deleteLater()
             if self.tabbar.count() == 0:
                 self.new_home_tab(focus=True)

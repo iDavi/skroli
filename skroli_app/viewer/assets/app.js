@@ -398,6 +398,15 @@ function onKey(e){
 const items = new Map();
 let ready = false;
 let fetching = false;
+/* Bound memory: the server only streams recent items but never asks us to drop
+   aged-out ones, so over a long session the map would grow without limit. Keep
+   the newest ITEM_CAP by publish time. */
+const ITEM_CAP = 1500;
+function pruneItems(){
+  if(items.size <= ITEM_CAP) return;
+  const ordered = [...items.values()].sort((a,b)=>(b.published_at||0)-(a.published_at||0));
+  for(const it of ordered.slice(ITEM_CAP)) items.delete(it.id);
+}
 function esc(s){ const d=document.createElement('div'); d.textContent = (s==null?'':s); return d.innerHTML; }
 function relTime(ts){
   const s = Date.now()/1000 - ts;
@@ -474,6 +483,7 @@ function connect(){
     if(msg.type==='items'){
       // Buffer silently — don't reorder the visible feed while a fetch is running.
       msg.items.forEach(it=>items.set(it.id, it));
+      pruneItems();
       if(!fetching) renderFeed();   // cached load / idle update: safe to show now
     } else if(msg.type==='ready'){
       ready = true; renderFeed();

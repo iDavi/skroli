@@ -42,6 +42,11 @@ class Storage:
         self._lock = threading.Lock()
         self._db = sqlite3.connect(str(db_path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
+        # WAL lets the enhancer worker write while WebSocket connects read, with
+        # far less locking contention; NORMAL sync is the right durability trade
+        # for a cache we can always re-fetch.
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA synchronous=NORMAL")
         self._db.execute(
             """
             CREATE TABLE IF NOT EXISTS items (
@@ -65,6 +70,14 @@ class Storage:
             self._db.execute("ALTER TABLE items ADD COLUMN image TEXT NOT NULL DEFAULT ''")
         if "meta" not in cols:
             self._db.execute("ALTER TABLE items ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
+        # Indexes for the hot paths: load_recent / prune filter on first_seen,
+        # prune_sources scans saved.
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_items_first_seen ON items(first_seen)"
+        )
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_items_saved ON items(saved)"
+        )
         self._db.commit()
 
     def add_new(self, items: list[Item]) -> int:
