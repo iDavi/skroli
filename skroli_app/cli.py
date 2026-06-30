@@ -8,10 +8,7 @@ import threading
 import time
 
 from . import __version__
-from .ingestors.rss.ingestor import RssIngestor
-from .ingestors.hackernews.ingestor import HackerNewsIngestor
-from .enhancers.score.enhancer import ScoreEnhancer
-from .enhancers.engagement.enhancer import EngagementEnhancer
+from .core import registry
 from .viewer.viewer import SkroliViewer
 from .core.config import load_config, save_config, SECTIONS
 from .core.pipeline import Engine
@@ -21,9 +18,9 @@ from .core.stream import Broadcaster
 
 def _build(config) -> tuple[Engine, SkroliViewer]:
     storage = Storage(config.data_dir / "skroli.db")
-    ingestors = [RssIngestor(config.rss), HackerNewsIngestor(config.hn)]
-    # Order matters: score (recency) first, then engagement folds votes in.
-    enhancers = [ScoreEnhancer(config.score), EngagementEnhancer(config.engagement)]
+    # Built from the registry — order preserved (score before engagement).
+    ingestors = [a.build(getattr(config, a.attr)) for a in registry.ingestors()]
+    enhancers = [a.build(getattr(config, a.attr)) for a in registry.enhancers()]
     broadcaster = Broadcaster()
     engine = Engine(config, storage, ingestors, enhancers, broadcaster)
 
@@ -31,12 +28,6 @@ def _build(config) -> tuple[Engine, SkroliViewer]:
         # The viewer mutates the config dataclasses in place; persist + re-fetch.
         save_config(config)
         engine.refresh()
-
-    # Named actions the UI can invoke generically (kept here, not in the viewer).
-    from .ingestors.rss.ingestor import letterboxd_following
-    actions = {
-        "import-following": lambda p: {"users": letterboxd_following(str(p.get("username", "")))},
-    }
 
     viewer = SkroliViewer(
         port=config.runtime.port,
@@ -46,7 +37,7 @@ def _build(config) -> tuple[Engine, SkroliViewer]:
         on_save=on_save,
         config=config,
         sections=SECTIONS,
-        actions=actions,
+        actions=registry.actions(),      # addons declare their own actions
     )
     return engine, viewer
 

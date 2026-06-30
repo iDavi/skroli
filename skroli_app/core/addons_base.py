@@ -7,7 +7,7 @@ third-party addons from the store is a later milestone.
 from __future__ import annotations
 
 from dataclasses import dataclass, field as dfield
-from typing import Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from .models import Item
 
@@ -38,6 +38,38 @@ class Section:
     attr: str                       # attribute on Config holding this addon's dataclass
     desc: str = ""
     fields: list[Field] = dfield(default_factory=list)
+
+
+@dataclass
+class Addon:
+    """Everything core needs to know about one addon, declared by the addon
+    itself. The registry collects these; config/cli/pipeline drive off them, so
+    a new addon plugs in by exporting an ``Addon`` from its package — no edits to
+    core. (Future: third-party addons discovered via entry points / the store.)
+
+    ``build`` turns the addon's config dataclass into a live Ingestor/Enhancer.
+    ``origins`` (ingestors only) reports the source identities the addon is
+    currently configured to produce, so pruning isn't hardcoded in the engine.
+    ``actions`` are named operations the UI can invoke generically.
+    """
+
+    section: Section
+    config_class: type
+    build: Callable[[Any], Any]
+    origins: Callable[[Any], set[str]] | None = None
+    actions: dict[str, Callable[[dict], dict]] = dfield(default_factory=dict)
+
+    @property
+    def id(self) -> str:
+        return self.section.id
+
+    @property
+    def group(self) -> str:
+        return self.section.group
+
+    @property
+    def attr(self) -> str:
+        return self.section.attr
 
 
 @runtime_checkable

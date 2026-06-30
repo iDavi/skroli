@@ -1,7 +1,9 @@
 """Top-level configuration (SPECS §9).
 
-Each addon owns its own config schema (e.g. ``ingestors/rss/config.py``); this
-module just aggregates them into one ``Config`` and reads/writes the TOML file.
+Addons own their config schema (``ingestors/rss/config.py`` etc.) and are listed
+in ``registry``. This module is generic: it builds the live config, and reads /
+writes the TOML file, purely by walking each addon's declared ``Field``s — it
+never names a specific addon, so a new addon needs no changes here.
 """
 
 from __future__ import annotations
@@ -9,25 +11,14 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
-from ..enhancers.engagement import config as engagement_config
-from ..enhancers.score import config as score_config
-from ..ingestors.hackernews import config as hackernews_config
-from ..ingestors.rss import config as rss_config
+from . import registry
+from .addons_base import Addon, Field
 
-EngagementConfig = engagement_config.EngagementConfig
-ScoreConfig = score_config.ScoreConfig
-HnConfig = hackernews_config.HnConfig
-RssConfig = rss_config.RssConfig
-
-# The configurable addons, in display order. The viewer renders/saves these
-# generically — it never references a specific addon.
-SECTIONS = [
-    rss_config.SECTION,
-    hackernews_config.SECTION,
-    score_config.SECTION,
-    engagement_config.SECTION,
-]
+# The configurable addons, in display order — the viewer renders/saves these
+# generically. Kept as a module attribute for back-compat with importers.
+SECTIONS = registry.sections()
 
 DEFAULT_CONFIG_NAME = "skroli.config.toml"
 
@@ -37,29 +28,70 @@ class RuntimeConfig:
     poll_interval_minutes: int = 15
     retention_hours: int = 48
     port: int = 4242
-    open_window: bool = False  # use pywebview if available
+    open_window: bool = False  # use a native window if available
 
 
 @dataclass
 class Config:
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
-    rss: RssConfig = field(default_factory=RssConfig)
-    hn: HnConfig = field(default_factory=HnConfig)
-    score: ScoreConfig = field(default_factory=ScoreConfig)
-    engagement: EngagementConfig = field(default_factory=EngagementConfig)
     data_dir: Path = field(default_factory=lambda: Path.home() / ".skroli")
     source_path: Path | None = None
+    # Live addon config dataclasses, keyed by addon ``attr`` (e.g. "rss", "hn").
+    # Also exposed as attributes (``config.rss``) for ergonomic access.
+    addons: dict[str, Any] = field(default_factory=dict)
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached when normal lookup fails — serve addon configs by attr.
+        addons = self.__dict__.get("addons", {})
+        if name in addons:
+            return addons[name]
+        raise AttributeError(name)
+
+    def set_addon(self, addon: Addon, inst: Any) -> None:
+        self.addons[addon.attr] = inst
 
 
-def _default_rss() -> RssConfig:
-    """A sensible starter so a fresh install shows something immediately."""
-    return RssConfig(
-        feeds=["https://www.theverge.com/rss/index.xml"],
-        subreddits=["programming", "selfhosted"],
-        letterboxd=[],
-    )
+# --- starter content for a fresh install (no config file yet) ------------------
+def _apply_starter(cfg: Config) -> None:
+    rss = cfg.addons.get("rss")
+    if rss is not None:
+        rss.feeds = ["https://www.theverge.com/rss/index.xml"]
+        rss.subreddits = ["programming", "selfhosted"]
 
 
+# --- generic field <-> value coercion -----------------------------------------
+def _coerce(f: Field, value: Any) -> Any:
+    if f.kind == "toggle":
+        return bool(value)
+    if f.kind == "int":
+        return int(value)
+    if f.kind == "float":
+        return float(value)
+    if f.kind == "list":
+        return [str(x) for x in (value or [])]
+    if f.kind == "weights":
+        out: dict[str, float] = {}
+        for k, v in (value or {}).items():
+            try:
+                out[str(k)] = float(v)
+            except (ValueError, TypeError):
+                continue
+        return out
+    return value
+
+
+def _addon_from_table(addon: Addon, table: dict) -> Any:
+    inst = addon.config_class()   # defaults
+    for f in addon.section.fields:
+        if f.key in table:
+            try:
+                setattr(inst, f.key, _coerce(f, table[f.key]))
+            except (ValueError, TypeError):
+                pass
+    return inst
+
+
+# --- TOML serialization (driven by field kinds) -------------------------------
 def _toml_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -73,8 +105,20 @@ def _toml_num(value: float) -> str:
     return f"{value:g}" if value != int(value) else f"{value:.1f}"
 
 
+def _toml_scalar(kind: str, value: Any) -> str:
+    if kind == "toggle":
+        return "true" if value else "false"
+    if kind == "int":
+        return str(int(value))
+    if kind == "float":
+        return _toml_num(float(value))
+    if kind == "list":
+        return _toml_array(value or [])
+    return str(value)
+
+
 def save_config(config: Config) -> Path:
-    """Write ``config`` back to disk as TOML. Used by the in-UI editor.
+    """Write ``config`` back to disk as TOML (used by the in-UI editor).
 
     Targets ``config.source_path`` if known, else ``./skroli.config.toml``. The
     file is regenerated from the live config, so hand-written comments are lost.
@@ -89,31 +133,24 @@ def save_config(config: Config) -> Path:
         f"retention_hours = {rt.retention_hours}",
         f"port = {rt.port}",
         f"open_window = {'true' if rt.open_window else 'false'}",
-        "",
-        "[ingestors.rss]",
-        f"enabled = {'true' if config.rss.enabled else 'false'}",
-        f"feeds = {_toml_array(config.rss.feeds)}",
-        f"subreddits = {_toml_array(config.rss.subreddits)}",
-        f"letterboxd = {_toml_array(config.rss.letterboxd)}",
-        "",
-        "[ingestors.hackernews]",
-        f"enabled = {'true' if config.hn.enabled else 'false'}",
-        f"count = {config.hn.count}",
-        "",
-        "[enhancers.score]",
-        f"enabled = {'true' if config.score.enabled else 'false'}",
-        f"half_life_hours = {_toml_num(config.score.half_life_hours)}",
     ]
-    if config.score.weights:
-        lines += ["", "[enhancers.score.weights]"]
-        lines += [f'"{_toml_escape(k)}" = {_toml_num(v)}' for k, v in config.score.weights.items()]
-    lines += [
-        "",
-        "[enhancers.engagement]",
-        f"enabled = {'true' if config.engagement.enabled else 'false'}",
-        f"weight = {_toml_num(config.engagement.weight)}",
-        f"cap = {config.engagement.cap}",
-    ]
+
+    for addon in registry.all_addons():
+        inst = config.addons[addon.attr]
+        lines += ["", f"[{addon.group}s.{addon.id}]"]
+        weights: list[tuple[str, dict]] = []
+        for f in addon.section.fields:
+            val = getattr(inst, f.key)
+            if f.kind == "weights":
+                weights.append((f.key, val or {}))
+            else:
+                lines.append(f"{f.key} = {_toml_scalar(f.kind, val)}")
+        for key, mapping in weights:
+            if mapping:
+                lines += ["", f"[{addon.group}s.{addon.id}.{key}]"]
+                lines += [f'"{_toml_escape(k)}" = {_toml_num(v)}'
+                          for k, v in mapping.items()]
+
     target.write_text("\n".join(lines) + "\n")
     config.source_path = target
     return target
@@ -125,9 +162,11 @@ def load_config(path: str | Path | None = None) -> Config:
     Missing file is not an error: you get a working starter config.
     """
     cfg = Config()
+    raw: dict = {}
 
     candidate = Path(path) if path else Path.cwd() / DEFAULT_CONFIG_NAME
-    if candidate.exists():
+    has_file = candidate.exists()
+    if has_file:
         raw = tomllib.loads(candidate.read_text())
         cfg.source_path = candidate
 
@@ -138,37 +177,15 @@ def load_config(path: str | Path | None = None) -> Config:
             port=int(rt.get("port", 4242)),
             open_window=bool(rt.get("open_window", False)),
         )
-
-        ingestors = raw.get("ingestors", {})
-        rss = ingestors.get("rss", {})
-        cfg.rss = RssConfig(
-            enabled=bool(rss.get("enabled", True)),
-            feeds=list(rss.get("feeds", [])),
-            subreddits=list(rss.get("subreddits", [])),
-            letterboxd=list(rss.get("letterboxd", [])),
-        )
-        hn = ingestors.get("hackernews", {})
-        cfg.hn = HnConfig(enabled=bool(hn.get("enabled", True)), count=int(hn.get("count", 30)))
-
-        enhancers = raw.get("enhancers", {})
-        sc = enhancers.get("score", {})
-        cfg.score = ScoreConfig(
-            enabled=bool(sc.get("enabled", True)),
-            half_life_hours=float(sc.get("half_life_hours", 12.0)),
-            weights={str(k): float(v) for k, v in sc.get("weights", {}).items()},
-        )
-        eng = enhancers.get("engagement", {})
-        cfg.engagement = EngagementConfig(
-            enabled=bool(eng.get("enabled", True)),
-            weight=float(eng.get("weight", 0.4)),
-            cap=int(eng.get("cap", 2000)),
-        )
-
         if "data_dir" in raw:
             cfg.data_dir = Path(raw["data_dir"]).expanduser()
-    else:
-        # No config file: ship a starter so `skroli run` works out of the box.
-        cfg.rss = _default_rss()
+
+    for addon in registry.all_addons():
+        table = raw.get(f"{addon.group}s", {}).get(addon.id, {})
+        cfg.set_addon(addon, _addon_from_table(addon, table))
+
+    if not has_file:
+        _apply_starter(cfg)   # ship something to look at out of the box
 
     cfg.data_dir.mkdir(parents=True, exist_ok=True)
     return cfg
