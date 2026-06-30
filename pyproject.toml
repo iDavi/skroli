@@ -1,0 +1,29 @@
+[project]
+name = "skroli"
+version = "0.0.1"
+description = "Your custom local internet algorithm. Simple, as it should be."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+# Zero runtime dependencies — 0.0.1 runs on the Python standard library alone.
+dependencies = []
+
+[project.optional-dependencies]
+# Lightweight native window (single web view) instead of a browser tab.
+desktop = ["pywebview>=5.0"]
+# Full cross-platform native shell: frameless window with browser-style tabs and
+# our own window controls in the tab row. Pure PySide6 — no platform packages.
+native = ["PySide6>=6.6"]
+
+[project.scripts]
+skroli = "skroli_app.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["skroli_app*"]
+
+[tool.setuptools.package-data]
+"skroli_app.viewer" = ["assets/*"]

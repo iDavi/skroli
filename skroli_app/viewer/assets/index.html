@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>skroli</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body class="home">
+  <div class="topbar">
+    <div class="tabs" id="tabs"></div>
+    <button class="tabadd" id="tabadd" title="New feed tab (⌘T)">+</button>
+    <div class="dragspace pywebview-drag-region"></div>
+  </div>
+  <div class="shell">
+    <nav class="nav">
+      <div class="brand">skroli</div>
+      <div class="item active" onclick="show('home',this)"><span class="ic">⌂</span> Home</div>
+      <div class="item" onclick="show('ingestors',this)"><span class="ic">↓</span> Ingestors</div>
+      <div class="item" onclick="show('enhancers',this)"><span class="ic">⇅</span> Enhancers</div>
+      <div class="item soon"><span class="ic">⚙</span> Settings</div>
+    </nav>
+
+    <main class="feed">
+      <section id="feeds" class="view active"></section>      <!-- one container per feed tab -->
+      <section id="sourceviews" class="view"></section>       <!-- one container per source page -->
+      <section id="browser" class="view"></section>           <!-- one container per page tab -->
+      <section id="ingestors" class="view"></section>
+      <section id="enhancers" class="view"></section>
+    </main>
+
+    <aside class="rail">
+      <div class="panel"><h3>Sources</h3><div id="sources"><div class="srcrow">none yet</div></div></div>
+    </aside>
+  </div>
+
+  <datalist id="srclist"></datalist>
+  <script src="/app.js"></script>
+</body>
+</html>

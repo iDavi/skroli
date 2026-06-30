@@ -1,0 +1,179 @@
+"""Local item store + deduplication (SPECS §5.2, §5.3).
+
+A thin SQLite layer. The schema is internal; addons never touch it directly.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+from datetime import timedelta
+from pathlib import Path
+
+from .models import Item, utcnow
+
+
+def _load_meta(raw: str) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _derive_origin(source: str) -> str | None:
+    """Best-effort origin for items stored before origins were tagged, derived
+    from the source name. Lets the purge clean up legacy Reddit/Letterboxd/HN
+    items; plain feeds can't be mapped, so they're left alone."""
+    if source.startswith("Letterboxd · "):
+        return "letterboxd:" + source[len("Letterboxd · "):]
+    if source.startswith("r/"):
+        return "reddit:" + source[2:]
+    if source == "Hacker News":
+        return "hn"
+    return None
+
+
+class Storage:
+    def __init__(self, db_path: str | Path):
+        # Streaming means several threads (ingestor fetches, the enhancer worker,
+        # WebSocket connects) touch the DB, so guard every access with a lock.
+        self._lock = threading.Lock()
+        self._db = sqlite3.connect(str(db_path), check_same_thread=False)
+        self._db.row_factory = sqlite3.Row
+        # WAL lets the enhancer worker write while WebSocket connects read, with
+        # far less locking contention; NORMAL sync is the right durability trade
+        # for a cache we can always re-fetch.
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA synchronous=NORMAL")
+        self._db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS items (
+                id           TEXT PRIMARY KEY,
+                source       TEXT NOT NULL,
+                url          TEXT NOT NULL,
+                title        TEXT NOT NULL,
+                body         TEXT NOT NULL DEFAULT '',
+                author       TEXT NOT NULL DEFAULT '',
+                image        TEXT NOT NULL DEFAULT '',
+                meta         TEXT NOT NULL DEFAULT '{}',
+                published_at REAL NOT NULL,
+                first_seen   REAL NOT NULL,
+                saved        INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        # Migrate older databases that predate added columns.
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(items)")}
+        if "image" not in cols:
+            self._db.execute("ALTER TABLE items ADD COLUMN image TEXT NOT NULL DEFAULT ''")
+        if "meta" not in cols:
+            self._db.execute("ALTER TABLE items ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'")
+        # Indexes for the hot paths: load_recent / prune filter on first_seen,
+        # prune_sources scans saved.
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_items_first_seen ON items(first_seen)"
+        )
+        self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_items_saved ON items(saved)"
+        )
+        self._db.commit()
+
+    def add_new(self, items: list[Item]) -> int:
+        """Insert items, upserting ones we've seen. Returns how many were new.
+
+        A single ``ON CONFLICT`` upsert per item (batched with executemany)
+        replaces the old insert-then-update pair: for already-seen items it
+        refreshes the volatile bits — meta (votes/points drift) and an image
+        that's newly available — without disturbing first_seen / saved.
+        """
+        if not items:
+            return 0
+        now = utcnow().timestamp()
+        rows = [
+            (
+                it.id, it.source, it.url, it.title, it.body, it.author, it.image,
+                json.dumps(it.meta or {}), it.published_at.timestamp(), now,
+            )
+            for it in items
+        ]
+        ids = [it.id for it in items]
+        with self._lock:
+            placeholders = ",".join("?" * len(ids))
+            existing = {
+                r[0] for r in self._db.execute(
+                    f"SELECT id FROM items WHERE id IN ({placeholders})", ids
+                )
+            }
+            self._db.executemany(
+                """
+                INSERT INTO items
+                    (id, source, url, title, body, author, image, meta, published_at, first_seen)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    meta = excluded.meta,
+                    image = CASE WHEN items.image = '' AND excluded.image <> ''
+                                 THEN excluded.image ELSE items.image END
+                """,
+                rows,
+            )
+            self._db.commit()
+        return sum(1 for i in ids if i not in existing)
+
+    def load_recent(self, retention_hours: int) -> list[Item]:
+        """All items first seen within the retention window, plus any saved."""
+        from datetime import datetime, timezone
+
+        cutoff = (utcnow() - timedelta(hours=retention_hours)).timestamp()
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM items WHERE first_seen >= ? OR saved = 1",
+                (cutoff,),
+            ).fetchall()
+        return [
+            Item(
+                id=r["id"],
+                source=r["source"],
+                url=r["url"],
+                title=r["title"],
+                body=r["body"],
+                author=r["author"],
+                image=r["image"],
+                meta=_load_meta(r["meta"]),
+                published_at=datetime.fromtimestamp(r["published_at"], tz=timezone.utc),
+                saved=bool(r["saved"]),
+            )
+            for r in rows
+        ]
+
+    def prune_sources(self, valid_origins: set[str]) -> int:
+        """Delete unsaved items whose origin is no longer configured (a source
+        was removed). Items without an origin (legacy) are left alone."""
+        removed = 0
+        with self._lock:
+            rows = self._db.execute("SELECT id, source, meta FROM items WHERE saved = 0").fetchall()
+            stale = [
+                r["id"] for r in rows
+                if (o := _load_meta(r["meta"]).get("origin") or _derive_origin(r["source"]))
+                is not None and o not in valid_origins
+            ]
+            for rid in stale:
+                self._db.execute("DELETE FROM items WHERE id = ?", (rid,))
+            removed = len(stale)
+            if removed:
+                self._db.commit()
+        return removed
+
+    def prune(self, retention_hours: int) -> int:
+        """Drop unsaved items older than the retention window."""
+        cutoff = (utcnow() - timedelta(hours=retention_hours)).timestamp()
+        with self._lock:
+            cur = self._db.execute(
+                "DELETE FROM items WHERE saved = 0 AND first_seen < ?", (cutoff,)
+            )
+            self._db.commit()
+        return cur.rowcount
+
+    def close(self) -> None:
+        self._db.close()
