@@ -31,7 +31,7 @@ QMainWindow, QWidget { background: #4f4b3b; color: #f5f3ec; }
 QTabBar#tabbar { background: #4f4b3b; }
 QTabBar#tabbar::tab {
   background: #4f4b3b; color: #d9d6c8;
-  height: 44px; min-width: 120px; max-width: 220px; padding: 0 8px 0 14px;
+  height: 44px; padding: 0 8px 0 14px;
   border: 0; border-right: 1px solid #605b46;
   font-family: "Libertinus Math", "Libertinus Serif", Georgia, serif;
   font-size: 14px;
@@ -100,36 +100,57 @@ def run(url: str) -> None:
 
     RESIZE_MARGIN = 6   # px of grabbable border around the content for resizing
 
-    class DragBar(QWidget):
-        """The empty stretch of the top row; dragging it moves the window,
-        double-click maximizes. Uses a manual cursor-delta move (startSystemMove
-        proved unreliable for this frameless window), with a native fallback."""
+    class TabBar(QTabBar):
+        """Browser-style tab bar: tabs shrink to share the available width when
+        there are many, the empty area drags the window, and double-clicking the
+        empty area opens a new tab."""
 
         def __init__(self, shell):
             super().__init__()
-            self.setObjectName("dragbar")
             self._shell = shell
-            self._press = None       # global cursor pos when the drag started
-            self._origin = None      # window top-left when the drag started
-
-        def mousePressEvent(self, event):  # noqa: N802 (Qt naming)
-            if event.button() == Qt.MouseButton.LeftButton:
-                self._press = event.globalPosition().toPoint()
-                self._origin = self._shell.frameGeometry().topLeft()
-                event.accept()
-
-        def mouseMoveEvent(self, event):  # noqa: N802
-            if self._press is not None:
-                delta = event.globalPosition().toPoint() - self._press
-                self._shell.move(self._origin + delta)
-                event.accept()
-
-        def mouseReleaseEvent(self, event):  # noqa: N802
             self._press = None
             self._origin = None
 
+        def tabSizeHint(self, index):  # noqa: N802
+            hint = super().tabSizeHint(index)
+            n = self.count()
+            if n > 0 and self.width() > 0:
+                share = self.width() // n
+                hint.setWidth(max(56, min(220, share)))
+            return hint
+
+        def _on_empty(self, pos):
+            return self.tabAt(pos) < 0
+
         def mouseDoubleClickEvent(self, event):  # noqa: N802
-            self._shell.toggle_max()
+            if event.button() == Qt.MouseButton.LeftButton and self._on_empty(event.position().toPoint()):
+                self._shell.new_home_tab(focus=True)
+                event.accept()
+                return
+            super().mouseDoubleClickEvent(event)
+
+        def mousePressEvent(self, event):  # noqa: N802
+            if event.button() == Qt.MouseButton.LeftButton and self._on_empty(event.position().toPoint()):
+                self._press = event.globalPosition().toPoint()
+                self._origin = self._shell.frameGeometry().topLeft()
+                event.accept()
+                return
+            super().mousePressEvent(event)
+
+        def mouseMoveEvent(self, event):  # noqa: N802
+            if self._press is not None:
+                self._shell.move(self._origin + (event.globalPosition().toPoint() - self._press))
+                event.accept()
+                return
+            super().mouseMoveEvent(event)
+
+        def mouseReleaseEvent(self, event):  # noqa: N802
+            if self._press is not None:
+                self._press = None
+                self._origin = None
+                event.accept()
+                return
+            super().mouseReleaseEvent(event)
 
     class ResizeFrame(QWidget):
         """Holds the web view with a thin border margin; the margin (the only
@@ -215,7 +236,7 @@ def run(url: str) -> None:
             self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
 
             # --- tab bar (standalone, paired with a stacked content area) ---
-            self.tabbar = QTabBar()
+            self.tabbar = TabBar(self)
             self.tabbar.setObjectName("tabbar")
             # We attach our own close button on the RIGHT of each tab (macOS Qt
             # would otherwise put the built-in one on the left, by the lights).
@@ -245,9 +266,8 @@ def run(url: str) -> None:
             row.setSpacing(0)
             if is_mac:
                 row.addWidget(MacLights(self))
-            row.addWidget(self.tabbar)
+            row.addWidget(self.tabbar, 1)   # fills the row; empty area drags
             row.addWidget(plus)
-            row.addWidget(DragBar(self), 1)
             if not is_mac:
                 row.addWidget(self._win_controls())
 
@@ -387,6 +407,16 @@ def run(url: str) -> None:
             QShortcut(QKeySequence.StandardKey.Close, self, activated=self.close_current)
             QShortcut(QKeySequence("Ctrl+Tab"), self, activated=lambda: self._cycle(1))
             QShortcut(QKeySequence("Ctrl+Shift+Tab"), self, activated=lambda: self._cycle(-1))
+            # ⌘/Ctrl+1..8 jump to a tab, ⌘/Ctrl+9 jumps to the last (browser style)
+            for n in range(1, 9):
+                QShortcut(QKeySequence(f"Ctrl+{n}"), self,
+                          activated=lambda i=n - 1: self._select(i))
+            QShortcut(QKeySequence("Ctrl+9"), self,
+                      activated=lambda: self._select(self.tabbar.count() - 1))
+
+        def _select(self, index: int) -> None:
+            if 0 <= index < self.tabbar.count():
+                self.tabbar.setCurrentIndex(index)
 
         def _cycle(self, delta: int) -> None:
             n = self.tabbar.count()

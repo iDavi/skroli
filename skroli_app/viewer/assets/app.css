@@ -24,7 +24,7 @@ a{color:inherit;text-decoration:none}
 .nav .item.soon:hover{background:none}
 
 /* ---------- middle column ---------- */
-.feed{width:600px;flex:0 0 600px;margin-left:auto;border-right:1px solid var(--olive-line);overflow-y:auto;min-height:0}
+.feed{width:600px;flex:0 0 600px;margin-left:auto;border-right:1px solid var(--olive-line);overflow-y:auto;overflow-x:hidden;min-height:0}
 /* page (browser) view: no right rail, page fills the remaining width */
 body.pageview .rail{display:none}
 body.pageview .feed{flex:1 1 auto;width:auto;margin-left:0;border-right:0}
@@ -45,7 +45,9 @@ body.pageview .feed{flex:1 1 auto;width:auto;margin-left:0;border-right:0}
 /* ---------- feed posts ---------- */
 .view{display:none}
 .view.active{display:block}
-.post{padding:16px 22px;border-bottom:1px solid var(--olive-line);display:flex;gap:13px}
+.post{padding:16px 22px;border-bottom:1px solid var(--olive-line);display:flex;gap:13px;min-width:0}
+.post .body{min-width:0}
+.title,.excerpt{overflow-wrap:anywhere}
 .post:hover{background:var(--card)}
 .src{width:38px;height:38px;flex:0 0 38px;display:flex;align-items:center;justify-content:center;
  font-size:13px;border:1px solid var(--olive-line);background:#6b5d34;color:#e7d6a3}
