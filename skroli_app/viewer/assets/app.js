@@ -475,33 +475,52 @@ function renderFeed(){
     dl.innerHTML = names.map(s=>'<option value="'+esc(s)+'">').join('');
   }
 }
-function connect(){
+/* One message handler shared by both transports below. */
+function handleMessage(msg){
+  if(msg.type==='items'){
+    // Buffer silently — don't reorder the visible feed while a fetch is running.
+    msg.items.forEach(it=>items.set(it.id, it));
+    pruneItems();
+    if(!fetching) renderFeed();   // cached load / idle update: safe to show now
+  } else if(msg.type==='ready'){
+    ready = true; renderFeed();
+  } else if(msg.type==='status'){
+    fetching = !!msg.fetching;
+    document.querySelectorAll('.refreshbtn').forEach(b=>b.classList.toggle('spin', fetching));
+    if(!fetching){
+      if(msg.origins){   // drop items from sources no longer in the config
+        const valid = new Set(msg.origins);
+        for(const [id,it] of items){ if(it.origin && !valid.has(it.origin)) items.delete(id); }
+      }
+      renderFeed();   // fetch finished → one settled update
+    }
+  }
+}
+/* Direct WebSocket — the fallback when SharedWorker isn't available. */
+function connectDirect(){
   const proto = location.protocol==='https:' ? 'wss' : 'ws';
   const ws = new WebSocket(proto+'://'+location.host+'/ws');
-  ws.onmessage = ev => {
-    const msg = JSON.parse(ev.data);
-    if(msg.type==='items'){
-      // Buffer silently — don't reorder the visible feed while a fetch is running.
-      msg.items.forEach(it=>items.set(it.id, it));
-      pruneItems();
-      if(!fetching) renderFeed();   // cached load / idle update: safe to show now
-    } else if(msg.type==='ready'){
-      ready = true; renderFeed();
-    } else if(msg.type==='status'){
-      fetching = !!msg.fetching;
-      document.querySelectorAll('.refreshbtn').forEach(b=>b.classList.toggle('spin', fetching));
-      if(!fetching){
-        if(msg.origins){   // drop items from sources no longer in the config
-          const valid = new Set(msg.origins);
-          for(const [id,it] of items){ if(it.origin && !valid.has(it.origin)) items.delete(id); }
-        }
-        renderFeed();   // fetch finished → one settled update
-      }
-    }
-  };
-  ws.onclose = () => setTimeout(connect, 1500);
+  ws.onmessage = ev => handleMessage(JSON.parse(ev.data));
+  ws.onclose = () => setTimeout(connectDirect, 1500);
 }
-connect();
+/* Preferred: a SharedWorker owns the single WebSocket + item store and fans
+   updates out to every tab, so N feed tabs share ONE server connection (see
+   issue #7). Falls back to a per-tab WebSocket if SharedWorker is unavailable. */
+function startFeed(){
+  if(typeof SharedWorker !== 'undefined'){
+    try {
+      const worker = new SharedWorker('/feed-worker.js', {name:'skroli-feed'});
+      worker.port.onmessage = e => handleMessage(e.data);
+      worker.onerror = connectDirect;   // worker failed to load → direct WS
+      worker.port.start();
+      // Let the worker drop our port when this tab goes away.
+      addEventListener('pagehide', () => { try { worker.port.postMessage({type:'bye'}); } catch(_){} });
+      return;
+    } catch(_){ /* fall through to a direct connection */ }
+  }
+  connectDirect();
+}
+startFeed();
 function refresh(btn){ btn.classList.add('spin'); fetch('/api/refresh', {method:'POST'}); }
 
 /* ----- config forms (generic — rendered from /api/config sections) ----- */

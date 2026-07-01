@@ -134,6 +134,8 @@ class SkroliViewer:
                     self._send(_asset("app.css"), "text/css; charset=utf-8")
                 elif route == "/app.js":
                     self._send(_asset("app.js"), "application/javascript; charset=utf-8")
+                elif route == "/feed-worker.js":
+                    self._send(_asset("feed-worker.js"), "application/javascript; charset=utf-8")
                 elif self.path == "/api/config":
                     self._json({"sections": [
                         _section_form(viewer._config, s) for s in viewer._sections
