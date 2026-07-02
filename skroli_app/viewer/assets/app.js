@@ -261,6 +261,14 @@ function onPostClick(e){
   const bg = e.metaKey || e.ctrlKey || e.button === 1;   // open in background tab
   const link = e.target.closest('[data-open]');
   if (link){ e.stopPropagation(); openPage(link.dataset.open, link.dataset.openTitle || '', { background: bg }); return; }
+  const gi = e.target.closest('.gimgcard');              // discovery insert
+  if (gi){
+    if (bg){ openPage(gi.dataset.url, gi.dataset.title, { background: true }); return; }
+    const pics = currentPics();
+    const i = pics.findIndex(p => p.id === gi.dataset.id);
+    if (i >= 0) openLightbox(i); else openPage(gi.dataset.url, gi.dataset.title);
+    return;
+  }
   const post = e.target.closest('.post');
   if (post && post.dataset.url) openPage(post.dataset.url, post.dataset.title, { background: bg });
 }
@@ -590,6 +598,34 @@ function closeLightbox(){
   const el = document.getElementById('lightbox');
   if (el) el.classList.remove('open');
 }
+/* Discovery inserts: one Images-pool photo woven in per 8 feed posts, as its
+   own kind of element. Selection hashes the neighbouring post id, so inserts
+   are stable across re-renders (no popping) but vary along the feed. */
+const IMG_EVERY = 8;
+function _hashStr(s){ let h = 0; for (let i = 0; i < s.length; i++){ h = (h * 31 + s.charCodeAt(i)) | 0; } return Math.abs(h); }
+function feedImageCard(it){
+  const ratio = (it.img_w && it.img_h) ? ' style="aspect-ratio:'+(+it.img_w)+'/'+(+it.img_h)+'"' : '';
+  return '<div class="gimgcard" data-id="'+esc(it.id)+'" data-url="'+esc(it.url)+'" data-title="'+esc(it.title)+'">'+
+    '<img src="'+esc(it.image)+'" alt="" loading="lazy" decoding="async"'+ratio+' onerror="this.closest(\'.gimgcard\').remove()">'+
+    '<div class="gimeta"><span class="gitag">✦ images</span>'+
+    '<span class="gititle">'+esc(it.title)+'</span>'+
+    '<span class="gsub" data-source="'+esc(it.source)+'">'+esc(it.source)+'</span></div></div>';
+}
+function feedHTML(arr, pics){
+  if (!pics.length) return arr.map(postHTML).join('');
+  const used = new Set();
+  const out = [];
+  arr.forEach((it, i) => {
+    out.push(postHTML(it));
+    if ((i + 1) % IMG_EVERY === 0){
+      let k = _hashStr(it.id) % pics.length;
+      for (let step = 0; step < pics.length && used.has(k); step++) k = (k + 1) % pics.length;
+      used.add(k);
+      out.push(feedImageCard(pics[k]));
+    }
+  });
+  return out.join('');
+}
 let _lastSig = '';
 function renderFeed(){
   const all = [...items.values()].sort((a,b)=>(b.score||0)-(a.score||0));
@@ -599,9 +635,10 @@ function renderFeed(){
   _lastSig = sig;
   // Gallery items feed the Images grid; everything else is the reading feed.
   const arr = all.filter(it=>!it.gallery);
+  const pool = all.filter(it=>it.gallery && it.image);   // discovery inserts
   renderGrid();
   const html = arr.length
-    ? arr.map(postHTML).join('')
+    ? feedHTML(arr, pool)
     : '<div class="empty">'+((ready && !fetching) ? 'No items yet. Add feeds in Ingestors, then refresh.' : 'Loading your feed…')+'</div>';
   document.querySelectorAll('#feeds .feedview .posts').forEach(p => p.innerHTML = html);
   document.querySelectorAll('#feeds .feedview .count').forEach(c => c.textContent = arr.length + ' items');

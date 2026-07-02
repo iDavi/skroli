@@ -185,6 +185,18 @@ body.shell .topbar{display:none}
 .reader .rcomment .rcmeta{font-size:13px;color:var(--stone);margin-bottom:4px}
 .reader .rcomment p{margin:0 0 8px}
 
+/* ---------- discovery inserts in the reading feed ---------- */
+.gimgcard{border-bottom:1px solid var(--olive-line);cursor:pointer;background:var(--card)}
+.gimgcard img{width:100%;display:block;max-height:440px;object-fit:cover;background:var(--olive-soft)}
+.gimgcard .gimeta{display:flex;align-items:baseline;gap:12px;padding:10px 22px;min-width:0}
+.gimgcard .gitag{color:var(--gold);font-size:12px;letter-spacing:.6px;flex:0 0 auto}
+.gimgcard .gititle{font-size:14px;color:var(--parchment-dim);white-space:nowrap;
+ overflow:hidden;text-overflow:ellipsis;min-width:0}
+.gimgcard .gsub{margin-left:auto;flex:0 0 auto;font-size:12px;color:var(--stone)}
+.gimgcard .gsub:hover{color:var(--gold);text-decoration:underline}
+.gimgcard:hover{background:var(--card-hover)}
+.gimgcard:hover .gititle{color:var(--parchment)}
+
 /* ---------- Images grid (masonry) ---------- */
 #images .grid{columns:5 220px;column-gap:14px;padding:16px 22px}
 .gcard{position:relative;break-inside:avoid;margin:0 0 14px;border:1px solid var(--olive-line);
