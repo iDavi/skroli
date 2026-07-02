@@ -288,13 +288,10 @@ def run(url: str) -> None:
             self._rz_geo = None
             self._rz_pos = None
 
-            # background-tab lifecycle (memory): freeze soon, discard when idle
+            # background-tab lifecycle (memory): freeze background tabs when idle
             self._freeze_timer = QTimer(self)
             self._freeze_timer.setSingleShot(True)
             self._freeze_timer.timeout.connect(self._freeze_background)
-            self._discard_timer = QTimer(self)
-            self._discard_timer.setSingleShot(True)
-            self._discard_timer.timeout.connect(self._discard_background)
 
             # The web view's surface swallows mouse events, so leave a thin
             # border of plain olive around it that the window can be resized by.
@@ -407,36 +404,29 @@ def run(url: str) -> None:
             if view is not None:
                 self.setWindowTitle((view.title() or "skroli").strip() or "skroli")
                 self._set_lifecycle(view, "active")   # wake it immediately
-            # Background tabs: freeze soon (stops JS/rendering, keeps the DOM),
-            # discard after long idle (drops the whole renderer; auto-reloads on
-            # activation). This is where multi-tab memory actually goes.
+            # Background tabs: freeze after a short idle — stops their JS and
+            # rendering (the multi-tab CPU/memory cost) while keeping the DOM.
+            # We deliberately do NOT use the Discarded state: destroying and
+            # reactivating renderers triggers stale-GPU-texture errors on macOS.
             self._freeze_timer.start(20_000)
-            self._discard_timer.start(15 * 60_000)
 
         def _set_lifecycle(self, view, state: str) -> None:
             try:
                 from PySide6.QtWebEngineCore import QWebEnginePage
                 st = {"active": QWebEnginePage.LifecycleState.Active,
-                      "frozen": QWebEnginePage.LifecycleState.Frozen,
-                      "discarded": QWebEnginePage.LifecycleState.Discarded}[state]
+                      "frozen": QWebEnginePage.LifecycleState.Frozen}[state]
                 page = view.page()
                 if page is not None and page.lifecycleState() != st:
                     page.setLifecycleState(st)
             except Exception:  # noqa: BLE001 - lifecycle is an optimization only
                 pass
 
-        def _background_views(self):
-            cur = self.stack.currentWidget()
-            return [self.stack.widget(i) for i in range(self.stack.count())
-                    if self.stack.widget(i) is not cur]
-
         def _freeze_background(self) -> None:
-            for v in self._background_views():
-                self._set_lifecycle(v, "frozen")
-
-        def _discard_background(self) -> None:
-            for v in self._background_views():
-                self._set_lifecycle(v, "discarded")
+            cur = self.stack.currentWidget()
+            for i in range(self.stack.count()):
+                v = self.stack.widget(i)
+                if v is not cur:
+                    self._set_lifecycle(v, "frozen")
 
         def _on_moved(self, frm: int, to: int) -> None:
             widget = self.stack.widget(frm)

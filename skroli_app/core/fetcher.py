@@ -8,6 +8,7 @@ can't stall the others. Standard library only.
 
 from __future__ import annotations
 
+import queue
 import random
 import threading
 import time
@@ -97,3 +98,37 @@ BROWSER_UA = (
 
 def fetch(url: str, headers: dict | None = None, retries: int | None = None) -> bytes:
     return SHARED.get(url, headers=headers, retries=retries)
+
+
+def parallel_map(fn, items: list, workers: int = 8) -> list:
+    """Run ``fn`` over ``items`` on a small pool of DAEMON threads and return
+    results in order. Daemon threads matter: unlike ThreadPoolExecutor, they're
+    never joined at interpreter exit, so Ctrl-C during a slow fetch shuts the
+    app down immediately instead of blocking on a hung socket."""
+    if not items:
+        return []
+    results: list = [None] * len(items)
+    todo: "queue.Queue[int]" = queue.Queue()
+    for i in range(len(items)):
+        todo.put(i)
+
+    def worker() -> None:
+        while True:
+            try:
+                i = todo.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                results[i] = fn(items[i])
+            finally:
+                todo.task_done()
+
+    threads = [
+        threading.Thread(target=worker, daemon=True)
+        for _ in range(min(workers, len(items)))
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results

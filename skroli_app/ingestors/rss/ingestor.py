@@ -18,13 +18,12 @@ import hashlib
 import html
 import re
 import xml.etree.ElementTree as ET
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 from .config import RssConfig
-from ...core.fetcher import fetch
+from ...core.fetcher import fetch, parallel_map
 from ...core.models import Item, utcnow
 from ...core import reddit
 
@@ -249,11 +248,11 @@ class RssIngestor:
             tasks.append(self._fetch_reddit_all)   # all subreddits = one request
         if not tasks:
             return []
-        # Fetch concurrently — the fetcher throttles per domain, so this only
-        # overlaps requests to *different* hosts (same-host stays serialized
-        # and rate-limited). Turns a serial sum of latencies into ~the slowest.
+        # Fetch concurrently (daemon threads — see parallel_map). The fetcher
+        # throttles per domain, so this only overlaps requests to *different*
+        # hosts; same-host stays serialized and rate-limited. Turns a serial sum
+        # of latencies into ~the slowest.
         items: list[Item] = []
-        with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as pool:
-            for result in pool.map(lambda fn: fn(), tasks):
-                items.extend(result)
+        for result in parallel_map(lambda fn: fn(), tasks, workers=8):
+            items.extend(result or [])
         return items
