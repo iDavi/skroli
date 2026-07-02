@@ -364,13 +364,31 @@ document.addEventListener('DOMContentLoaded', ()=>{
   const grid = document.getElementById('images');
   const onGridClick = e => {
     if (e.target.closest('.refreshbtn')){ refresh(e.target.closest('.refreshbtn')); return; }
+    const save = e.target.closest('[data-save]');
+    if (save){ e.stopPropagation(); toggleSaved(save.dataset.save); return; }
+    const chipEl = e.target.closest('[data-chip]');
+    if (chipEl){ gridSrc = chipEl.dataset.chip; renderGrid(); return; }
     const src = e.target.closest('[data-source]');
     if (src){ e.stopPropagation(); openSource(src.dataset.source); return; }
     const card = e.target.closest('.gcard');
-    if (card) openPage(card.dataset.url, card.dataset.title, { background: e.metaKey || e.ctrlKey || e.button === 1 });
+    if (!card) return;
+    if (e.metaKey || e.ctrlKey || e.button === 1){        // browser convention
+      openPage(card.dataset.url, card.dataset.title, { background: true });
+      return;
+    }
+    // Plain click = lightbox; the post itself opens from inside it.
+    const pics = currentPics();
+    const i = pics.findIndex(p => p.id === card.dataset.id);
+    if (i >= 0) openLightbox(i);
   };
   grid.addEventListener('click', onGridClick);
   grid.addEventListener('auxclick', e => { if (e.button === 1) onGridClick(e); });
+  document.getElementById('gsearch').addEventListener('input', e => { gridQuery = e.target.value; renderGrid(); });
+  document.getElementById('gsort').addEventListener('change', e => { gridSort = e.target.value; renderGrid(); });
+  document.getElementById('gshuffle').addEventListener('click', () => {
+    gridSort = 'shuffle'; gridSeed = (Math.random() * 1e9) | 0;
+    document.getElementById('gsort').value = 'shuffle'; renderGrid();
+  });
   document.getElementById('sourceviews').addEventListener('click', onPostClick);
   document.getElementById('sourceviews').addEventListener('auxclick', e => { if (e.button === 1) onPostClick(e); });
   document.getElementById('browser').addEventListener('click', e => {   // (6) history buttons
@@ -395,6 +413,12 @@ document.addEventListener('DOMContentLoaded', ()=>{
 });
 /* ---- (2) keyboard shortcuts ---- */
 function onKey(e){
+  if (_lb.open){   // lightbox owns the keyboard while it's up
+    if (e.key === 'Escape'){ e.preventDefault(); closeLightbox(); }
+    else if (e.key === 'ArrowLeft'){ e.preventDefault(); lbNav(-1); }
+    else if (e.key === 'ArrowRight'){ e.preventDefault(); lbNav(1); }
+    return;
+  }
   if (e.ctrlKey && e.key === 'Tab'){ e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); return; }
   const mod = e.metaKey || e.ctrlKey; if (!mod) return;
   if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable) return;
@@ -454,12 +478,117 @@ function postHTML(it){
     '<span class="score">score <b>'+(it.score||0).toFixed(2)+'</b>'+
     '<span class="meter"><i style="width:'+pct+'%"></i></span></span></div></div></article>';
 }
+/* ----- Images grid: filters, saved hearts, shuffle, lightbox ----- */
+let gridQuery = '', gridSrc = '', gridSort = 'score', gridSeed = 1;
+let savedImgs = {};
+try { savedImgs = JSON.parse(localStorage.getItem('skroli.savedimg') || '{}') || {}; } catch(_){}
+function persistSaved(){
+  const keys = Object.keys(savedImgs);
+  if (keys.length > 500) keys.slice(0, keys.length - 500).forEach(k => delete savedImgs[k]);
+  try { localStorage.setItem('skroli.savedimg', JSON.stringify(savedImgs)); } catch(_){}
+}
+function toggleSaved(id){
+  const it = savedImgs[id] || [...items.values()].find(x => x.id === id);
+  if (!it) return;
+  if (savedImgs[id]) delete savedImgs[id]; else savedImgs[id] = it;
+  persistSaved(); renderGrid();
+  if (_lb.open) lbShow(_lb.idx);   // refresh the heart in the lightbox too
+}
+function seededRandom(seed){ let s = seed >>> 0; return () => (s = (s * 1664525 + 1013904223) >>> 0) / 4294967296; }
+function currentPics(){
+  // Saved images persist locally even after the server prunes them.
+  const map = new Map();
+  Object.values(savedImgs).forEach(it => map.set(it.id, it));
+  [...items.values()].filter(it => it.gallery && it.image).forEach(it => map.set(it.id, it));
+  let pics = [...map.values()];
+  if (gridSrc === '__saved') pics = pics.filter(it => savedImgs[it.id]);
+  else if (gridSrc) pics = pics.filter(it => it.source === gridSrc);
+  const q = gridQuery.trim().toLowerCase();
+  if (q) pics = pics.filter(it => (it.title + ' ' + it.source).toLowerCase().includes(q));
+  const seen = new Set();   // dedupe crossposts by image URL
+  pics = pics.filter(it => !seen.has(it.image) && seen.add(it.image));
+  if (gridSort === 'new') pics.sort((a,b) => (b.published_at||0) - (a.published_at||0));
+  else if (gridSort === 'shuffle'){ const rnd = seededRandom(gridSeed); pics = pics.map(p => [rnd(), p]).sort((a,b) => a[0]-b[0]).map(x => x[1]); }
+  else pics.sort((a,b) => (b.score||0) - (a.score||0));
+  return pics;
+}
 function gridHTML(it){
   const eng = it.engagement != null ? ' · ▲ '+it.engagement : '';
-  return '<figure class="gcard" data-url="'+esc(it.url)+'" data-title="'+esc(it.title)+'">'+
-    '<img src="'+esc(it.image)+'" alt="" loading="lazy" onerror="this.closest(\'.gcard\').remove()">'+
+  const ratio = (it.img_w && it.img_h) ? ' style="aspect-ratio:'+(+it.img_w)+'/'+(+it.img_h)+'"' : '';
+  const badge = it.n_images > 1 ? '<span class="gbadge">▤ '+it.n_images+'</span>' : '';
+  const heart = '<button class="gsave'+(savedImgs[it.id] ? ' on' : '')+'" data-save="'+esc(it.id)+'" title="Save">'+(savedImgs[it.id] ? '♥' : '♡')+'</button>';
+  return '<figure class="gcard" data-id="'+esc(it.id)+'" data-url="'+esc(it.url)+'" data-title="'+esc(it.title)+'">'+
+    '<img src="'+esc(it.image)+'" alt="" loading="lazy" decoding="async"'+ratio+' onerror="this.closest(\'.gcard\').remove()">'+
+    badge + heart +
     '<figcaption><span class="gtitle">'+esc(it.title)+'</span>'+
     '<span class="gsub" data-source="'+esc(it.source)+'">'+esc(it.source)+eng+'</span></figcaption></figure>';
+}
+function renderGrid(){
+  const grid = document.querySelector('#images .grid');
+  if (!grid) return;
+  const pics = currentPics();
+  grid.innerHTML = pics.length
+    ? pics.map(gridHTML).join('')
+    : '<div class="empty">'+((ready && !fetching) ? (gridSrc || gridQuery ? 'Nothing matches this filter.' : 'No images yet. Check the Images ingestor, then refresh.') : 'Loading images…')+'</div>';
+  document.querySelector('#images .count').textContent = pics.length + ' images';
+  // Source chips: All | ♥ Saved | the biggest sources in the pool.
+  const counts = {};
+  const map = new Map();
+  Object.values(savedImgs).forEach(it => map.set(it.id, it));
+  [...items.values()].filter(it => it.gallery && it.image).forEach(it => map.set(it.id, it));
+  map.forEach(it => counts[it.source] = (counts[it.source]||0) + 1);
+  const top = Object.entries(counts).sort((a,b) => b[1]-a[1]).slice(0, 12);
+  const chip = (val, label, n) => '<button class="gchip'+(gridSrc === val ? ' on' : '')+'" data-chip="'+esc(val)+'">'+label+(n != null ? ' <i>'+n+'</i>' : '')+'</button>';
+  document.getElementById('gchips').innerHTML =
+    chip('', 'All') + chip('__saved', '♥ saved', Object.keys(savedImgs).length || null) +
+    top.map(([s, n]) => chip(s, esc(s), n)).join('');
+}
+/* ---- lightbox ---- */
+const _lb = { open: false, pics: [], idx: -1 };
+function openLightbox(idx){
+  _lb.pics = currentPics(); _lb.idx = idx; _lb.open = true;
+  let el = document.getElementById('lightbox');
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'lightbox';
+    el.innerHTML = '<button class="lbx" title="Close (Esc)">×</button>'+
+      '<button class="lbnav lbprev" title="Previous (←)">‹</button>'+
+      '<div class="lbmain"><img><div class="lbcap">'+
+      '<span class="lbtitle"></span><span class="lbmeta"></span>'+
+      '<span class="lbacts"><button class="lbsave"></button>'+
+      '<button class="lbopen">open post</button><button class="lbcomments">comments</button></span>'+
+      '</div></div>'+
+      '<button class="lbnav lbnext" title="Next (→)">›</button>';
+    el.addEventListener('click', e => {
+      const it = _lb.pics[_lb.idx];
+      if (e.target.classList.contains('lbx') || e.target === el) closeLightbox();
+      else if (e.target.classList.contains('lbprev')) lbNav(-1);
+      else if (e.target.classList.contains('lbnext')) lbNav(1);
+      else if (e.target.classList.contains('lbsave') && it) toggleSaved(it.id);
+      else if (e.target.classList.contains('lbopen') && it){ closeLightbox(); openPage(it.url, it.title); }
+      else if (e.target.classList.contains('lbcomments') && it && it.comments_url){ closeLightbox(); openPage(it.comments_url, it.source + ' — comments'); }
+    });
+    document.body.appendChild(el);
+  }
+  el.classList.add('open');
+  lbShow(idx);
+}
+function lbShow(i){
+  const it = _lb.pics[i]; if (!it) return;
+  _lb.idx = i;
+  const el = document.getElementById('lightbox');
+  el.querySelector('img').src = it.image;
+  el.querySelector('.lbtitle').textContent = it.title;
+  const eng = it.engagement != null ? ' · ▲ ' + it.engagement : '';
+  el.querySelector('.lbmeta').textContent = it.source + eng + ' · ' + (i+1) + '/' + _lb.pics.length;
+  el.querySelector('.lbsave').textContent = savedImgs[it.id] ? '♥ saved' : '♡ save';
+  el.querySelector('.lbcomments').style.display = it.comments_url ? '' : 'none';
+}
+function lbNav(d){ const n = _lb.pics.length; if (n) lbShow(((_lb.idx + d) % n + n) % n); }
+function closeLightbox(){
+  _lb.open = false;
+  const el = document.getElementById('lightbox');
+  if (el) el.classList.remove('open');
 }
 let _lastSig = '';
 function renderFeed(){
@@ -470,11 +599,7 @@ function renderFeed(){
   _lastSig = sig;
   // Gallery items feed the Images grid; everything else is the reading feed.
   const arr = all.filter(it=>!it.gallery);
-  const pics = all.filter(it=>it.gallery && it.image);
-  document.querySelector('#images .grid').innerHTML = pics.length
-    ? pics.map(gridHTML).join('')
-    : '<div class="empty">'+((ready && !fetching) ? 'No images yet. Check the Images ingestor, then refresh.' : 'Loading images…')+'</div>';
-  document.querySelector('#images .count').textContent = pics.length + ' images';
+  renderGrid();
   const html = arr.length
     ? arr.map(postHTML).join('')
     : '<div class="empty">'+((ready && !fetching) ? 'No items yet. Add feeds in Ingestors, then refresh.' : 'Loading your feed…')+'</div>';
@@ -566,7 +691,7 @@ function weightRow(name, val){
   return '<div class="erow"><input class="wname" list="srclist" value="'+esc(name||'')+'" placeholder="pick or type a source">'+
     '<input class="wval" type="number" step="0.1" value="'+esc(val==null?'':val)+'" placeholder="1.0">'+X+'</div>';
 }
-function toggleHTML(id,on){ return '<label class="toggle"><span>enabled</span><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'></label>'; }
+function toggleHTML(id,on,label){ return '<label class="toggle"><span>'+esc(label||'enabled')+'</span><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'></label>'; }
 function addRow(sid,key,prefix){ _append(listId(sid,key), listRow(prefix,'')); }
 function addWeight(sid,key){ _append(listId(sid,key), weightRow('','')); }
 
@@ -592,6 +717,11 @@ function fieldHTML(s, f){
       '<div id="'+listId(s.id,f.key)+'" data-list="'+f.key+'" data-prefix="'+esc(f.prefix||'')+'">'+rows+'</div>'+
       '<button class="addbtn" type="button" onclick="addRow(\''+s.id+'\',\''+f.key+'\',\''+esc(f.prefix||'')+'\')">+ add</button>'+imp+'</div>';
   }
+  if(f.kind==='select'){
+    const opts = (f.options||[]).map(o=>'<option value="'+esc(o)+'"'+(o===v?' selected':'')+'>'+esc(o)+'</option>').join('');
+    return '<div class="col"><h4>'+esc(f.label||f.key)+'</h4>'+
+      '<div class="kv"><span></span><select data-f="'+f.key+'">'+opts+'</select></div></div>';
+  }
   if(f.kind==='weights'){
     const rows = Object.entries(v||{}).map(([n,wv])=>weightRow(n,wv)).join('');
     return '<div class="col"><h4>'+esc(f.label||f.key)+'</h4>'+
@@ -604,7 +734,7 @@ function cardHTML(s){
   let title = '<div class="ctitle">'+esc(s.title)+' <span class="pill">built-in</span>';
   const cols = [];
   s.fields.forEach(f=>{
-    if(f.kind==='toggle'){ title += toggleHTML('en_'+s.id, !!s.values[f.key]); }
+    if(f.kind==='toggle'){ title += toggleHTML('en_'+s.id+'_'+f.key, !!s.values[f.key], f.key==='enabled'?'enabled':(f.label||f.key)); }
     else { cols.push(fieldHTML(s,f)); }
   });
   title += '</div>';
@@ -624,8 +754,9 @@ function saveSection(btn){
   const card = btn.closest('.card'); const id = card.dataset.id;
   const s = sections.find(x=>x.id===id); const values = {};
   s.fields.forEach(f=>{
-    if(f.kind==='toggle'){ values[f.key] = card.querySelector('#en_'+id).checked; }
+    if(f.kind==='toggle'){ values[f.key] = card.querySelector('#en_'+id+'_'+f.key).checked; }
     else if(f.kind==='int' || f.kind==='float'){ const n = parseFloat(card.querySelector('[data-f="'+f.key+'"]').value); values[f.key] = isNaN(n)?0:n; }
+    else if(f.kind==='select'){ values[f.key] = card.querySelector('[data-f="'+f.key+'"]').value; }
     else if(f.kind==='list'){ values[f.key] = [...card.querySelectorAll('[data-list="'+f.key+'"] input')].map(i=>i.value.trim()).filter(Boolean); }
     else if(f.kind==='weights'){ const w={}; card.querySelectorAll('[data-weights="'+f.key+'"] .erow').forEach(r=>{ const n=r.querySelector('.wname').value.trim(); const vv=parseFloat(r.querySelector('.wval').value); if(n&&!isNaN(vv)) w[n]=vv; }); values[f.key]=w; }
   });

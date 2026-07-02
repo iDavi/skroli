@@ -10,11 +10,13 @@ Images grid instead of the reading feed.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import xml.etree.ElementTree as ET
 
 from .config import ImagesConfig
 from ...core import reddit
+from ...core.fetcher import fetch
 from ...core.models import Item, utcnow
 
 _ATOM = "{http://www.w3.org/2005/Atom}"
@@ -33,11 +35,24 @@ class ImagesIngestor:
 
     def fetch(self) -> list[Item]:
         cfg = self._config
-        if not cfg.enabled or not cfg.subreddits:
+        if not cfg.enabled:
             return []
         names = [s.removeprefix("r/").strip("/") for s in cfg.subreddits if s.strip()]
+        items = self._fetch_reddit(names) + self._fetch_feeds(cfg.feeds)
+        return items
+
+    # ---- Reddit (batched JSON, RSS fallback) --------------------------------
+    def _fetch_reddit(self, names: list[str]) -> list[Item]:
+        if not names:
+            return []
+        cfg = self._config
         try:
-            posts = reddit.fetch_listing(names, limit=max(cfg.count, 10))
+            posts: list[dict] = []
+            # Chunk very wide sub lists to keep URLs sane; each chunk is still
+            # one request for up to 40 subreddits.
+            for i in range(0, len(names), 40):
+                posts.extend(reddit.fetch_listing(
+                    names[i:i + 40], sort=cfg.sort, limit=max(cfg.count, 10)))
             items: list[Item] = []
             for d in posts:
                 # ``img:`` namespaces both the item id and the origin, so the
@@ -46,16 +61,50 @@ class ImagesIngestor:
                 it = reddit.post_to_item(d, id_ns="img:", extra_meta={"gallery": True})
                 if it is None or not it.image:
                     continue
+                if it.meta.get("nsfw") and not cfg.allow_nsfw:
+                    continue
                 it.meta["origin"] = "img:" + it.meta["origin"]
                 items.append(it)
             if items:
-                print(f"  · images: {len(items)} photos (reddit JSON)")
+                print(f"  · images: {len(items)} photos (reddit JSON, {cfg.sort})")
                 return items
         except Exception as exc:  # noqa: BLE001 - fall back to RSS below
             print(f"  · images: reddit JSON blocked ({exc}); trying per-sub RSS")
         items = self._fetch_rss(names)
         print(f"  · images: {len(items)} photos (RSS fallback)")
         return items
+
+    # ---- non-Reddit image feeds (art blogs, picture-of-the-day…) ------------
+    def _fetch_feeds(self, feeds: list[str]) -> list[Item]:
+        if not feeds:
+            return []
+        # The RSS ingestor's parser is config-independent — reuse it rather than
+        # duplicating RSS/Atom + image extraction here.
+        from ..rss.config import RssConfig
+        from ..rss.ingestor import RssIngestor
+
+        parser = RssIngestor(RssConfig())
+        out: list[Item] = []
+        for url in feeds:
+            u = url.strip()
+            if not u:
+                continue
+            try:
+                found = parser._parse(fetch(u), "", u, "img:" + u)
+            except Exception as exc:  # noqa: BLE001 - one feed shouldn't stop the rest
+                print(f"  ! images feed failed ({u}): {exc}")
+                continue
+            for it in found:
+                if not it.image:
+                    continue
+                # Re-namespace the id so a copy of the same entry in the reading
+                # feed stays a distinct item (and keeps its own meta).
+                it.id = hashlib.sha1(("img:" + it.id).encode()).hexdigest()
+                it.meta["gallery"] = True
+                out.append(it)
+        if out:
+            print(f"  · images: {len(out)} photos (feeds)")
+        return out
 
     # ---- RSS fallback (no votes, but real images) --------------------------
     def _fetch_rss(self, names: list[str]) -> list[Item]:

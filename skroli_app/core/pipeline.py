@@ -40,6 +40,9 @@ def item_to_dict(it: Item) -> dict:
         "is_reddit": it.source.startswith("r/"),
         "origin": it.meta.get("origin"),
         "gallery": bool(it.meta.get("gallery")),   # Images-grid items, not feed
+        "img_w": it.meta.get("img_w"),             # image dimensions, when known
+        "img_h": it.meta.get("img_h"),             # (stops masonry layout jank)
+        "n_images": it.meta.get("n_images"),       # >1 marks multi-image posts
         # Engagement signals (present for Reddit / Hacker News items).
         "engagement": it.meta.get("engagement"),
         "comments": it.meta.get("comments"),

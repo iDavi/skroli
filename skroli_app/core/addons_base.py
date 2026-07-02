@@ -19,7 +19,7 @@ from .models import Item
 @dataclass
 class Field:
     key: str
-    kind: str                       # toggle | int | float | list | weights
+    kind: str                       # toggle | int | float | list | weights | select
     label: str = ""
     placeholder: str = ""
     prefix: str = ""                # shown before list inputs, e.g. "r/" or "@"
@@ -27,6 +27,7 @@ class Field:
     min: float | None = None
     max: float | None = None
     step: float | None = None
+    options: list[str] | None = None  # allowed values for kind="select"
 
 
 @dataclass

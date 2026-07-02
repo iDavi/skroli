@@ -28,9 +28,20 @@
       <section id="browser" class="view"></section>           <!-- one container per page tab -->
       <section id="images" class="view">
         <div class="head"><h1>Images</h1><span class="count">0 images</span>
+          <input id="gsearch" type="search" placeholder="search images…">
+          <select id="gsort" title="Sort">
+            <option value="score">top</option>
+            <option value="new">newest</option>
+            <option value="shuffle">shuffle</option>
+          </select>
+          <button id="gshuffle" class="iconbtn" title="Shuffle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>
+            <polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>
           <button class="iconbtn refreshbtn" title="Refresh">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button></div>
+        <div class="gchips" id="gchips"></div>
         <div class="grid"><div class="empty">Loading images…</div></div>
       </section>
       <section id="ingestors" class="view"></section>

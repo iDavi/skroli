@@ -78,6 +78,10 @@ def _apply_values(config, section: Section, values: dict) -> None:
                     except (ValueError, TypeError):
                         continue
                 setattr(target, f.key, w)
+            elif f.kind == "select":
+                s = str(v)
+                if not f.options or s in f.options:
+                    setattr(target, f.key, s)
         except (ValueError, TypeError):
             continue
 

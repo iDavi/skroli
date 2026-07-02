@@ -49,25 +49,51 @@ def get(path: str) -> bytes:
     raise last_exc if last_exc else RuntimeError("no attempts")
 
 
-def image_of(d: dict) -> str:
-    """Best preview image from a Reddit post's JSON, if any."""
+def image_info(d: dict) -> tuple[str, int, int, int]:
+    """Best image from a Reddit post's JSON: (url, width, height, count).
+
+    Handles gallery posts (``is_gallery`` + ``media_metadata`` — invisible to
+    the plain preview path), then the preview source, then the thumbnail.
+    ``count`` > 1 marks multi-image posts so the UI can badge them."""
+    if d.get("is_gallery") and d.get("media_metadata"):
+        order = [g.get("media_id") for g in (d.get("gallery_data") or {}).get("items", [])]
+        metas = d["media_metadata"]
+        for mid in order or list(metas):
+            s = (metas.get(mid) or {}).get("s") or {}
+            src = s.get("u") or s.get("gif") or ""
+            if src:
+                return html.unescape(src), int(s.get("x") or 0), int(s.get("y") or 0), max(len(order), 1)
     preview = d.get("preview") or {}
     images = preview.get("images") or []
     if images:
-        src = (images[0].get("source") or {}).get("url")
+        src_el = images[0].get("source") or {}
+        src = src_el.get("url")
         if src:
-            return html.unescape(src)  # Reddit HTML-escapes the URL
+            return (html.unescape(src), int(src_el.get("width") or 0),
+                    int(src_el.get("height") or 0), 1)
     thumb = d.get("thumbnail", "")
-    return thumb if thumb.startswith("http") else ""
+    if thumb.startswith("http"):
+        return thumb, 0, 0, 1
+    return "", 0, 0, 0
+
+
+def image_of(d: dict) -> str:
+    """Best preview image URL from a Reddit post's JSON, if any."""
+    return image_info(d)[0]
 
 
 def fetch_listing(subreddits: list[str], sort: str = "hot", limit: int = 100) -> list[dict]:
     """Fetch one batched listing for ``subreddits`` and return the raw post
-    dicts. Goes through the shared host/UA attempt chain."""
+    dicts. Goes through the shared host/UA attempt chain. ``sort`` accepts
+    hot/new/rising plus windowed top ("top-week", "top-month", "top-all")."""
     multi = "+".join(s.removeprefix("r/").strip("/") for s in subreddits if s.strip())
     if not multi:
         return []
-    raw = get(f"/r/{multi}/{sort}.json?limit={min(limit, 100)}&raw_json=1")
+    t = ""
+    if sort.startswith("top"):
+        sort, _, window = sort.partition("-")
+        t = f"&t={window or 'week'}"
+    raw = get(f"/r/{multi}/{sort}.json?limit={min(limit, 100)}&raw_json=1{t}")
     data = json.loads(raw)
     return [
         c.get("data", {})
@@ -101,7 +127,13 @@ def post_to_item(d: dict, id_ns: str = "", extra_meta: dict | None = None) -> It
         "comments": int(d.get("num_comments") or 0),
         "comments_url": permalink,
         "origin": f"reddit:{sub.lower()}",
+        "nsfw": bool(d.get("over_18")),
     }
+    image, w, h, count = image_info(d)
+    if w and h:
+        meta["img_w"], meta["img_h"] = w, h
+    if count > 1:
+        meta["n_images"] = count
     if extra_meta:
         meta.update(extra_meta)
     body = d.get("selftext", "") or ""
@@ -112,7 +144,7 @@ def post_to_item(d: dict, id_ns: str = "", extra_meta: dict | None = None) -> It
         title=(d.get("title") or "").strip() or "(untitled)",
         body=body.strip(),
         author=d.get("author", ""),
-        image=image_of(d),
+        image=image,
         published_at=published,
         meta=meta,
     )

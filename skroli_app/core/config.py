@@ -77,6 +77,11 @@ def _coerce(f: Field, value: Any) -> Any:
             except (ValueError, TypeError):
                 continue
         return out
+    if f.kind == "select":
+        s = str(value)
+        if f.options and s not in f.options:
+            raise ValueError(f"not an option: {s}")
+        return s
     return value
 
 
@@ -114,6 +119,8 @@ def _toml_scalar(kind: str, value: Any) -> str:
         return _toml_num(float(value))
     if kind == "list":
         return _toml_array(value or [])
+    if kind == "select":
+        return f'"{_toml_escape(str(value))}"'
     return str(value)
 
 
