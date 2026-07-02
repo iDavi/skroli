@@ -75,16 +75,9 @@ QToolButton#plus:hover { background: #56523f; color: #f5f3ec; }
 def run(url: str) -> None:
     """Open the native shell pointed at the local server ``url`` and block until
     closed. Raises ImportError if PySide6 isn't installed."""
-    import os
     import sys
 
-    # Rein Chromium in BEFORE Qt spins it up: share renderer processes across
-    # tabs instead of one-per-tab, and use low-end-device mode (smaller tiles &
-    # caches). Respect any flags the user already set.
-    _flags = "--renderer-process-limit=4 --enable-low-end-device-mode"
-    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", _flags)
-
-    from PySide6.QtCore import QEvent, QRect, QTimer, QUrl, Qt
+    from PySide6.QtCore import QEvent, QRect, QUrl, Qt
     from PySide6.QtGui import QKeySequence, QShortcut
     from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -288,11 +281,6 @@ def run(url: str) -> None:
             self._rz_geo = None
             self._rz_pos = None
 
-            # background-tab lifecycle (memory): freeze background tabs when idle
-            self._freeze_timer = QTimer(self)
-            self._freeze_timer.setSingleShot(True)
-            self._freeze_timer.timeout.connect(self._freeze_background)
-
             # The web view's surface swallows mouse events, so leave a thin
             # border of plain olive around it that the window can be resized by.
             content = ResizeFrame(self)
@@ -403,30 +391,6 @@ def run(url: str) -> None:
             view = self.stack.currentWidget()
             if view is not None:
                 self.setWindowTitle((view.title() or "skroli").strip() or "skroli")
-                self._set_lifecycle(view, "active")   # wake it immediately
-            # Background tabs: freeze after a short idle — stops their JS and
-            # rendering (the multi-tab CPU/memory cost) while keeping the DOM.
-            # We deliberately do NOT use the Discarded state: destroying and
-            # reactivating renderers triggers stale-GPU-texture errors on macOS.
-            self._freeze_timer.start(20_000)
-
-        def _set_lifecycle(self, view, state: str) -> None:
-            try:
-                from PySide6.QtWebEngineCore import QWebEnginePage
-                st = {"active": QWebEnginePage.LifecycleState.Active,
-                      "frozen": QWebEnginePage.LifecycleState.Frozen}[state]
-                page = view.page()
-                if page is not None and page.lifecycleState() != st:
-                    page.setLifecycleState(st)
-            except Exception:  # noqa: BLE001 - lifecycle is an optimization only
-                pass
-
-        def _freeze_background(self) -> None:
-            cur = self.stack.currentWidget()
-            for i in range(self.stack.count()):
-                v = self.stack.widget(i)
-                if v is not cur:
-                    self._set_lifecycle(v, "frozen")
 
         def _on_moved(self, frm: int, to: int) -> None:
             widget = self.stack.widget(frm)
