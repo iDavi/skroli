@@ -14,7 +14,7 @@ let ready = false;
 let lastStatus = null;         // replayed to tabs that connect later
 let ws = null;
 
-const WORKER_CAP = 4000;       // hard bound on the shared store
+const WORKER_CAP = 2000;       // hard bound on the shared store
 
 function post(port, msg){ try { port.postMessage(msg); } catch (_){} }
 function broadcast(msg){ for (const p of ports) post(p, msg); }

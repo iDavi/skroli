@@ -75,9 +75,16 @@ QToolButton#plus:hover { background: #56523f; color: #f5f3ec; }
 def run(url: str) -> None:
     """Open the native shell pointed at the local server ``url`` and block until
     closed. Raises ImportError if PySide6 isn't installed."""
+    import os
     import sys
 
-    from PySide6.QtCore import QEvent, QRect, QUrl, Qt
+    # Rein Chromium in BEFORE Qt spins it up: share renderer processes across
+    # tabs instead of one-per-tab, and use low-end-device mode (smaller tiles &
+    # caches). Respect any flags the user already set.
+    _flags = "--renderer-process-limit=4 --enable-low-end-device-mode"
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", _flags)
+
+    from PySide6.QtCore import QEvent, QRect, QTimer, QUrl, Qt
     from PySide6.QtGui import QKeySequence, QShortcut
     from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
     from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -97,6 +104,7 @@ def run(url: str) -> None:
     app = QApplication.instance() or QApplication(sys.argv)
     app.setStyleSheet(_QSS)
     profile = QWebEngineProfile("skroli", app)   # shared cookies/cache/logins
+    profile.setHttpCacheMaximumSize(64 * 1024 * 1024)   # cap disk/mem cache
 
     RESIZE_MARGIN = 6   # px of grabbable border around the content for resizing
 
@@ -280,6 +288,14 @@ def run(url: str) -> None:
             self._rz_geo = None
             self._rz_pos = None
 
+            # background-tab lifecycle (memory): freeze soon, discard when idle
+            self._freeze_timer = QTimer(self)
+            self._freeze_timer.setSingleShot(True)
+            self._freeze_timer.timeout.connect(self._freeze_background)
+            self._discard_timer = QTimer(self)
+            self._discard_timer.setSingleShot(True)
+            self._discard_timer.timeout.connect(self._discard_background)
+
             # The web view's surface swallows mouse events, so leave a thin
             # border of plain olive around it that the window can be resized by.
             content = ResizeFrame(self)
@@ -390,6 +406,37 @@ def run(url: str) -> None:
             view = self.stack.currentWidget()
             if view is not None:
                 self.setWindowTitle((view.title() or "skroli").strip() or "skroli")
+                self._set_lifecycle(view, "active")   # wake it immediately
+            # Background tabs: freeze soon (stops JS/rendering, keeps the DOM),
+            # discard after long idle (drops the whole renderer; auto-reloads on
+            # activation). This is where multi-tab memory actually goes.
+            self._freeze_timer.start(20_000)
+            self._discard_timer.start(15 * 60_000)
+
+        def _set_lifecycle(self, view, state: str) -> None:
+            try:
+                from PySide6.QtWebEngineCore import QWebEnginePage
+                st = {"active": QWebEnginePage.LifecycleState.Active,
+                      "frozen": QWebEnginePage.LifecycleState.Frozen,
+                      "discarded": QWebEnginePage.LifecycleState.Discarded}[state]
+                page = view.page()
+                if page is not None and page.lifecycleState() != st:
+                    page.setLifecycleState(st)
+            except Exception:  # noqa: BLE001 - lifecycle is an optimization only
+                pass
+
+        def _background_views(self):
+            cur = self.stack.currentWidget()
+            return [self.stack.widget(i) for i in range(self.stack.count())
+                    if self.stack.widget(i) is not cur]
+
+        def _freeze_background(self) -> None:
+            for v in self._background_views():
+                self._set_lifecycle(v, "frozen")
+
+        def _discard_background(self) -> None:
+            for v in self._background_views():
+                self._set_lifecycle(v, "discarded")
 
         def _on_moved(self, frm: int, to: int) -> None:
             widget = self.stack.widget(frm)

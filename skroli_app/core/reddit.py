@@ -49,36 +49,66 @@ def get(path: str) -> bytes:
     raise last_exc if last_exc else RuntimeError("no attempts")
 
 
-def image_info(d: dict) -> tuple[str, int, int, int]:
-    """Best image from a Reddit post's JSON: (url, width, height, count).
+# Cards/grid target width. Reddit's `source`/`s` is the ORIGINAL upload (often
+# 4000px+, tens of MB decoded) — rendering that in a wall of cards is what eats
+# gigabytes of memory. Cards get a ~mid-size preview; the original is kept
+# separately for the lightbox to load on demand.
+_CARD_WIDTH = 720
+
+
+def _pick_res(cands: list[dict], key_u: str, key_w: str, key_h: str) -> tuple[str, int, int]:
+    """From Reddit resolution candidates, the smallest one >= _CARD_WIDTH wide
+    (else the largest available)."""
+    best: tuple[str, int, int] = ("", 0, 0)
+    for c in cands or []:
+        u, w, h = c.get(key_u) or "", int(c.get(key_w) or 0), int(c.get(key_h) or 0)
+        if not u:
+            continue
+        if w >= _CARD_WIDTH and (best[1] < _CARD_WIDTH or w < best[1]):
+            best = (u, w, h)
+        elif best[1] < _CARD_WIDTH and w > best[1]:
+            best = (u, w, h)
+    return html.unescape(best[0]), best[1], best[2]
+
+
+def image_info(d: dict) -> tuple[str, int, int, int, str]:
+    """Best image from a Reddit post's JSON: (card_url, w, h, count, full_url).
 
     Handles gallery posts (``is_gallery`` + ``media_metadata`` — invisible to
-    the plain preview path), then the preview source, then the thumbnail.
-    ``count`` > 1 marks multi-image posts so the UI can badge them."""
+    the plain preview path), then the preview, then the thumbnail. The card URL
+    is a mid-size preview (memory!); ``full_url`` is the original, for the
+    lightbox. ``count`` > 1 marks multi-image posts so the UI can badge them."""
     if d.get("is_gallery") and d.get("media_metadata"):
         order = [g.get("media_id") for g in (d.get("gallery_data") or {}).get("items", [])]
         metas = d["media_metadata"]
         for mid in order or list(metas):
-            s = (metas.get(mid) or {}).get("s") or {}
-            src = s.get("u") or s.get("gif") or ""
-            if src:
-                return html.unescape(src), int(s.get("x") or 0), int(s.get("y") or 0), max(len(order), 1)
+            m = metas.get(mid) or {}
+            s = m.get("s") or {}
+            full = html.unescape(s.get("u") or s.get("gif") or "")
+            if not full:
+                continue
+            card, w, h = _pick_res(m.get("p") or [], "u", "x", "y")
+            if not card:
+                card, w, h = full, int(s.get("x") or 0), int(s.get("y") or 0)
+            return card, w, h, max(len(order), 1), full
     preview = d.get("preview") or {}
     images = preview.get("images") or []
     if images:
         src_el = images[0].get("source") or {}
-        src = src_el.get("url")
-        if src:
-            return (html.unescape(src), int(src_el.get("width") or 0),
-                    int(src_el.get("height") or 0), 1)
+        full = html.unescape(src_el.get("url") or "")
+        if full:
+            card, w, h = _pick_res(images[0].get("resolutions") or [], "url", "width", "height")
+            if not card:
+                card, w, h = full, int(src_el.get("width") or 0), int(src_el.get("height") or 0)
+            return card, w, h, 1, full
     thumb = d.get("thumbnail", "")
     if thumb.startswith("http"):
-        return thumb, 0, 0, 1
-    return "", 0, 0, 0
+        return thumb, 0, 0, 1, thumb
+    return "", 0, 0, 0, ""
 
 
 def image_of(d: dict) -> str:
-    """Best preview image URL from a Reddit post's JSON, if any."""
+    """Best card-size image URL from a Reddit post's JSON, if any."""
     return image_info(d)[0]
 
 
@@ -129,11 +159,13 @@ def post_to_item(d: dict, id_ns: str = "", extra_meta: dict | None = None) -> It
         "origin": f"reddit:{sub.lower()}",
         "nsfw": bool(d.get("over_18")),
     }
-    image, w, h, count = image_info(d)
+    image, w, h, count, full = image_info(d)
     if w and h:
         meta["img_w"], meta["img_h"] = w, h
     if count > 1:
         meta["n_images"] = count
+    if full and full != image:
+        meta["img_full"] = full   # original, loaded only by the lightbox
     if extra_meta:
         meta.update(extra_meta)
     body = d.get("selftext", "") or ""

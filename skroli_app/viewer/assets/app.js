@@ -31,6 +31,10 @@ function saveState(){
 function restore(){
   let s; try { s = JSON.parse(localStorage.getItem('skroli.tabs') || 'null'); } catch(_){ s = null; }
   if (!s || !Array.isArray(s.tabs) || !s.tabs.length) return false;
+  // Native shell: pages are NATIVE tabs; restoring web page-tabs here would
+  // mount invisible proxy iframes (a full page load each) in every shell tab.
+  if (SHELL) s.tabs = s.tabs.filter(t => t.kind !== 'page');
+  if (!s.tabs.length) return false;
   seq = s.seq || 0; section = s.section || 'browse';
   s.tabs.forEach(t => { tabs.push(t); mountTab(t); });
   activeKey = tabs.some(t => t.key === s.activeKey) ? s.activeKey : tabs[0].key;
@@ -444,7 +448,11 @@ let fetching = false;
 /* Bound memory: the server only streams recent items but never asks us to drop
    aged-out ones, so over a long session the map would grow without limit. Keep
    the newest ITEM_CAP by publish time. */
-const ITEM_CAP = 1500;
+const ITEM_CAP = 1000;
+/* DOM caps: what's *rendered* per view. More items stay in memory as data, but
+   thousands of live nodes + decoded images per view is what balloons RAM. */
+const FEED_RENDER_CAP = 200;
+const GRID_RENDER_CAP = 300;
 function pruneItems(){
   if(items.size <= ITEM_CAP) return;
   const ordered = [...items.values()].sort((a,b)=>(b.published_at||0)-(a.published_at||0));
@@ -536,7 +544,7 @@ function renderGrid(){
   if (!grid) return;
   const pics = currentPics();
   grid.innerHTML = pics.length
-    ? pics.map(gridHTML).join('')
+    ? pics.slice(0, GRID_RENDER_CAP).map(gridHTML).join('')
     : '<div class="empty">'+((ready && !fetching) ? (gridSrc || gridQuery ? 'Nothing matches this filter.' : 'No images yet. Check the Images ingestor, then refresh.') : 'Loading images…')+'</div>';
   document.querySelector('#images .count').textContent = pics.length + ' images';
   // Source chips: All | ♥ Saved | the biggest sources in the pool.
@@ -585,7 +593,7 @@ function lbShow(i){
   const it = _lb.pics[i]; if (!it) return;
   _lb.idx = i;
   const el = document.getElementById('lightbox');
-  el.querySelector('img').src = it.image;
+  el.querySelector('img').src = it.image_full || it.image;   // full res on demand
   el.querySelector('.lbtitle').textContent = it.title;
   const eng = it.engagement != null ? ' · ▲ ' + it.engagement : '';
   el.querySelector('.lbmeta').textContent = it.source + eng + ' · ' + (i+1) + '/' + _lb.pics.length;
@@ -638,13 +646,13 @@ function renderFeed(){
   const pool = all.filter(it=>it.gallery && it.image);   // discovery inserts
   renderGrid();
   const html = arr.length
-    ? feedHTML(arr, pool)
+    ? feedHTML(arr.slice(0, FEED_RENDER_CAP), pool)
     : '<div class="empty">'+((ready && !fetching) ? 'No items yet. Add feeds in Ingestors, then refresh.' : 'Loading your feed…')+'</div>';
   document.querySelectorAll('#feeds .feedview .posts').forEach(p => p.innerHTML = html);
   document.querySelectorAll('#feeds .feedview .count').forEach(c => c.textContent = arr.length + ' items');
   // Source "profile" pages: same posts, filtered to that source.
   document.querySelectorAll('#sourceviews .sourceview').forEach(v => {
-    const mine = arr.filter(it => it.source === v.dataset.source);
+    const mine = arr.filter(it => it.source === v.dataset.source).slice(0, FEED_RENDER_CAP);
     v.querySelector('.posts').innerHTML = mine.length ? mine.map(postHTML).join('')
       : '<div class="empty">No posts from this source right now.</div>';
     v.querySelector('.count').textContent = mine.length + ' items';
