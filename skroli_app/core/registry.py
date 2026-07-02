@@ -15,10 +15,11 @@ from __future__ import annotations
 from ..enhancers.engagement import ADDON as _engagement
 from ..enhancers.score import ADDON as _score
 from ..ingestors.hackernews import ADDON as _hackernews
+from ..ingestors.images import ADDON as _images
 from ..ingestors.rss import ADDON as _rss
 from .addons_base import Addon
 
-_BUILTINS: list[Addon] = [_rss, _hackernews, _score, _engagement]
+_BUILTINS: list[Addon] = [_rss, _hackernews, _images, _score, _engagement]
 
 
 def all_addons() -> list[Addon]:

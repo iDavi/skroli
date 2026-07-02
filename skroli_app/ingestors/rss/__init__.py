@@ -14,7 +14,9 @@ def _origins(cfg: RssConfig) -> set[str]:
     if not cfg.enabled:
         return set()
     origins = set(cfg.feeds)
-    origins |= {f"reddit:{s.removeprefix('r/').strip('/')}" for s in cfg.subreddits}
+    # Subreddit origins are lowercased (Reddit names are case-insensitive and
+    # batched listings report their own casing — see core/reddit.post_to_item).
+    origins |= {f"reddit:{s.removeprefix('r/').strip('/').lower()}" for s in cfg.subreddits}
     origins |= {f"letterboxd:{u.strip().lstrip('@').strip('/')}" for u in cfg.letterboxd}
     return origins
 

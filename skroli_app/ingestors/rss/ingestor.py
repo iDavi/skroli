@@ -16,9 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import html
-import json
 import re
-import urllib.error
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -28,6 +26,7 @@ from urllib.parse import urlparse
 from .config import RssConfig
 from ...core.fetcher import fetch
 from ...core.models import Item, utcnow
+from ...core import reddit
 
 ATOM = "{http://www.w3.org/2005/Atom}"
 MEDIA = "{http://search.yahoo.com/mrss/}"
@@ -116,18 +115,6 @@ def _extract_image(el) -> str:
     return _img_from_html(raw_html)
 
 
-def _reddit_image(d: dict) -> str:
-    """Best preview image from a Reddit post's JSON, if any."""
-    preview = d.get("preview") or {}
-    images = preview.get("images") or []
-    if images:
-        src = (images[0].get("source") or {}).get("url")
-        if src:
-            return html.unescape(src)  # Reddit HTML-escapes the URL
-    thumb = d.get("thumbnail", "")
-    return thumb if thumb.startswith("http") else ""
-
-
 def _parse_date(value: str) -> datetime:
     if not value:
         return utcnow()
@@ -154,7 +141,8 @@ class RssIngestor:
         self._config = config
 
     def _sources(self) -> list[tuple[str, str, str, str]]:
-        """Return (kind, label, url, origin) for every configured source.
+        """Return (kind, label, url, origin) for every plain-feed source.
+        Subreddits are handled separately (one batched request for all of them).
 
         ``origin`` is a stable id for the configured source (used to purge items
         when a source is removed from the config)."""
@@ -164,14 +152,10 @@ class RssIngestor:
         for user in self._config.letterboxd:
             u = user.strip().lstrip("@").strip("/")
             out.append(("rss", f"Letterboxd · {u}", f"https://letterboxd.com/{u}/rss/", f"letterboxd:{u}"))
-        for sub in self._config.subreddits:
-            name = sub.removeprefix("r/").strip("/")
-            out.append((
-                "reddit", f"r/{name}",
-                f"https://www.reddit.com/r/{name}/hot.json?limit={REDDIT_LIMIT}",
-                f"reddit:{name}",
-            ))
         return out
+
+    def _sub_names(self) -> list[str]:
+        return [s.removeprefix("r/").strip("/") for s in self._config.subreddits if s.strip()]
 
     def _parse(self, raw: bytes, label: str, url: str, origin: str) -> list[Item]:
         root = ET.fromstring(raw)
@@ -223,59 +207,39 @@ class RssIngestor:
             meta={"origin": origin},
         )
 
-    def _parse_reddit(self, raw: bytes, label: str, origin: str) -> list[Item]:
-        """Parse Reddit's JSON listing, capturing score/comments/image."""
-        data = json.loads(raw)
-        items: list[Item] = []
-        for child in data.get("data", {}).get("children", []):
-            d = child.get("data", {})
-            post_id = d.get("id")
-            if not post_id:
-                continue
-            permalink = "https://www.reddit.com" + d.get("permalink", "")
-            external = d.get("url_overridden_by_dest") or d.get("url") or permalink
-            created = d.get("created_utc")
-            published = (
-                datetime.fromtimestamp(float(created), tz=timezone.utc)
-                if created else utcnow()
-            )
-            items.append(Item(
-                id=_stable_id(label, post_id),
-                source=label,
-                url=external,
-                title=_clean(d.get("title", "")) or "(untitled)",
-                body=_clean(d.get("selftext", "")),
-                author=d.get("author", ""),
-                image=_reddit_image(d),
-                published_at=published,
-                meta={
-                    "engagement": int(d.get("score") or 0),
-                    "comments": int(d.get("num_comments") or 0),
-                    "comments_url": permalink,
-                    "origin": origin,
-                },
-            ))
-        return items
-
-    def _fetch_reddit(self, label: str, json_url: str, origin: str) -> list[Item]:
-        """Reddit's JSON API (with votes) tends to 403 from some networks; fall
-        back to the public .rss feed (no votes) so the subreddit still shows up."""
-        name = label.removeprefix("r/")
+    def _fetch_reddit_all(self) -> list[Item]:
+        """All configured subreddits in ONE batched multireddit request (the
+        rate-limit strategy — see core/reddit.py). Falls back to per-subreddit
+        RSS (no votes) only if the batched JSON is blocked on both hosts."""
+        names = self._sub_names()
+        if not names:
+            return []
         try:
-            # Fail fast (no long 429 backoff) — fall straight back to RSS instead.
-            return self._parse_reddit(fetch(json_url, retries=1), label, origin)
-        except urllib.error.HTTPError as exc:
-            if exc.code not in (403, 429, 404):
-                raise
-            print(f"  · reddit JSON unavailable for {label} ({exc.code}); using RSS (no votes)")
-            rss = fetch(f"https://www.reddit.com/r/{name}/.rss")
-            return self._parse(rss, label, json_url, origin)
+            posts = reddit.fetch_listing(names, limit=min(100, REDDIT_LIMIT * len(names)))
+            items = [it for d in posts if (it := reddit.post_to_item(d)) is not None]
+            if items:
+                return items
+        except Exception as exc:  # noqa: BLE001 - fall back to RSS below
+            print(f"  · reddit JSON blocked ({exc}); falling back to per-sub RSS (no votes)")
+        out: list[Item] = []
+        for name in names:
+            label, origin = f"r/{name}", f"reddit:{name.lower()}"
+            for host in ("https://old.reddit.com", "https://www.reddit.com"):
+                try:
+                    out.extend(self._parse(
+                        fetch(f"{host}/r/{name}/.rss", headers=reddit.REDDIT_HEADERS, retries=1),
+                        label, f"{host}/r/{name}", origin,
+                    ))
+                    break
+                except Exception:  # noqa: BLE001 - try the next host
+                    continue
+            else:
+                print(f"  ! subreddit failed on all hosts: r/{name}")
+        return out
 
     def _fetch_source(self, src: tuple[str, str, str, str]) -> list[Item]:
         kind, label, url, origin = src
         try:
-            if kind == "reddit":
-                return self._fetch_reddit(label, url, origin)
             return self._parse(fetch(url), label, url, origin)
         except Exception as exc:  # noqa: BLE001 - one bad feed shouldn't stop the rest
             print(f"  ! feed failed ({label or url}): {exc}")
@@ -285,13 +249,16 @@ class RssIngestor:
         if not self._config.enabled:
             return []
         sources = self._sources()
-        if not sources:
+        tasks = [lambda s=s: self._fetch_source(s) for s in sources]
+        if self._sub_names():
+            tasks.append(self._fetch_reddit_all)   # all subreddits = one request
+        if not tasks:
             return []
-        # Fetch sources concurrently — the fetcher throttles per domain, so this
-        # only overlaps requests to *different* hosts (same-host stays serialized
+        # Fetch concurrently — the fetcher throttles per domain, so this only
+        # overlaps requests to *different* hosts (same-host stays serialized
         # and rate-limited). Turns a serial sum of latencies into ~the slowest.
         items: list[Item] = []
-        with ThreadPoolExecutor(max_workers=min(8, len(sources))) as pool:
-            for result in pool.map(self._fetch_source, sources):
+        with ThreadPoolExecutor(max_workers=min(8, len(tasks))) as pool:
+            for result in pool.map(lambda fn: fn(), tasks):
                 items.extend(result)
         return items

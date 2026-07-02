@@ -16,6 +16,7 @@
     <nav class="nav">
       <div class="brand">skroli</div>
       <div class="item active" onclick="show('home',this)"><span class="ic">⌂</span> Home</div>
+      <div class="item" onclick="show('images',this)"><span class="ic">▦</span> Images</div>
       <div class="item" onclick="show('ingestors',this)"><span class="ic">↓</span> Ingestors</div>
       <div class="item" onclick="show('enhancers',this)"><span class="ic">⇅</span> Enhancers</div>
       <div class="item soon"><span class="ic">⚙</span> Settings</div>
@@ -25,6 +26,13 @@
       <section id="feeds" class="view active"></section>      <!-- one container per feed tab -->
       <section id="sourceviews" class="view"></section>       <!-- one container per source page -->
       <section id="browser" class="view"></section>           <!-- one container per page tab -->
+      <section id="images" class="view">
+        <div class="head"><h1>Images</h1><span class="count">0 images</span>
+          <button class="iconbtn refreshbtn" title="Refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg></button></div>
+        <div class="grid"><div class="empty">Loading images…</div></div>
+      </section>
       <section id="ingestors" class="view"></section>
       <section id="enhancers" class="view"></section>
     </main>

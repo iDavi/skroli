@@ -171,15 +171,16 @@ function render(){
   document.getElementById('feeds').classList.toggle('active', kind === 'feed');
   document.getElementById('sourceviews').classList.toggle('active', kind === 'source');
   document.getElementById('browser').classList.toggle('active', kind === 'page');
+  document.getElementById('images').classList.toggle('active', section === 'images');
   document.getElementById('ingestors').classList.toggle('active', section === 'ingestors');
   document.getElementById('enhancers').classList.toggle('active', section === 'enhancers');
   document.querySelectorAll('#feeds .feedview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
   document.querySelectorAll('#sourceviews .sourceview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
   document.querySelectorAll('#browser .tabview').forEach(v => v.classList.toggle('active', v.dataset.key === activeKey));
-  const navSel = section === 'ingestors' ? 1 : section === 'enhancers' ? 2 : 0;
+  const navSel = section === 'images' ? 1 : section === 'ingestors' ? 2 : section === 'enhancers' ? 3 : 0;
   document.querySelectorAll('.nav .item').forEach((n, i) => n.classList.toggle('active', i === navSel));
   document.body.classList.toggle('home', kind === 'feed');
-  document.body.classList.toggle('pageview', kind === 'page');  // full-width page, no rail
+  document.body.classList.toggle('pageview', kind === 'page' || section === 'images');  // full-width, no rail
   renderTabs();
   saveState();
 }
@@ -360,6 +361,16 @@ document.addEventListener('DOMContentLoaded', ()=>{
   });
   document.getElementById('feeds').addEventListener('click', onPostClick);
   document.getElementById('feeds').addEventListener('auxclick', e => { if (e.button === 1) onPostClick(e); });
+  const grid = document.getElementById('images');
+  const onGridClick = e => {
+    if (e.target.closest('.refreshbtn')){ refresh(e.target.closest('.refreshbtn')); return; }
+    const src = e.target.closest('[data-source]');
+    if (src){ e.stopPropagation(); openSource(src.dataset.source); return; }
+    const card = e.target.closest('.gcard');
+    if (card) openPage(card.dataset.url, card.dataset.title, { background: e.metaKey || e.ctrlKey || e.button === 1 });
+  };
+  grid.addEventListener('click', onGridClick);
+  grid.addEventListener('auxclick', e => { if (e.button === 1) onGridClick(e); });
   document.getElementById('sourceviews').addEventListener('click', onPostClick);
   document.getElementById('sourceviews').addEventListener('auxclick', e => { if (e.button === 1) onPostClick(e); });
   document.getElementById('browser').addEventListener('click', e => {   // (6) history buttons
@@ -443,13 +454,27 @@ function postHTML(it){
     '<span class="score">score <b>'+(it.score||0).toFixed(2)+'</b>'+
     '<span class="meter"><i style="width:'+pct+'%"></i></span></span></div></div></article>';
 }
+function gridHTML(it){
+  const eng = it.engagement != null ? ' · ▲ '+it.engagement : '';
+  return '<figure class="gcard" data-url="'+esc(it.url)+'" data-title="'+esc(it.title)+'">'+
+    '<img src="'+esc(it.image)+'" alt="" loading="lazy" onerror="this.closest(\'.gcard\').remove()">'+
+    '<figcaption><span class="gtitle">'+esc(it.title)+'</span>'+
+    '<span class="gsub" data-source="'+esc(it.source)+'">'+esc(it.source)+eng+'</span></figcaption></figure>';
+}
 let _lastSig = '';
 function renderFeed(){
-  const arr = [...items.values()].sort((a,b)=>(b.score||0)-(a.score||0));
+  const all = [...items.values()].sort((a,b)=>(b.score||0)-(a.score||0));
   // Skip the rebuild entirely if nothing visible actually changed (avoids flicker).
-  const sig = arr.map(it=>it.id+':'+(it.score||0)).join(',') + '|' + ready + '|' + fetching;
+  const sig = all.map(it=>it.id+':'+(it.score||0)).join(',') + '|' + ready + '|' + fetching;
   if(sig === _lastSig) return;
   _lastSig = sig;
+  // Gallery items feed the Images grid; everything else is the reading feed.
+  const arr = all.filter(it=>!it.gallery);
+  const pics = all.filter(it=>it.gallery && it.image);
+  document.querySelector('#images .grid').innerHTML = pics.length
+    ? pics.map(gridHTML).join('')
+    : '<div class="empty">'+((ready && !fetching) ? 'No images yet. Check the Images ingestor, then refresh.' : 'Loading images…')+'</div>';
+  document.querySelector('#images .count').textContent = pics.length + ' images';
   const html = arr.length
     ? arr.map(postHTML).join('')
     : '<div class="empty">'+((ready && !fetching) ? 'No items yet. Add feeds in Ingestors, then refresh.' : 'Loading your feed…')+'</div>';

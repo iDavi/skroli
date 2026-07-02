@@ -39,6 +39,7 @@ def item_to_dict(it: Item) -> dict:
         "published_at": it.published_at.timestamp(),
         "is_reddit": it.source.startswith("r/"),
         "origin": it.meta.get("origin"),
+        "gallery": bool(it.meta.get("gallery")),   # Images-grid items, not feed
         # Engagement signals (present for Reddit / Hacker News items).
         "engagement": it.meta.get("engagement"),
         "comments": it.meta.get("comments"),

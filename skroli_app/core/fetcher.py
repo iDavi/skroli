@@ -84,6 +84,15 @@ class Fetcher:
 # Process-wide shared instance so per-domain state is global across ingestors.
 SHARED = Fetcher()
 SHARED.set_domain_gap("www.reddit.com", 3.0)
+SHARED.set_domain_gap("old.reddit.com", 3.0)
+
+# Reddit's WAF blocks unknown/bot User-Agents outright (the 403s), while a
+# plain browser UA from a residential IP is fine. Sent for reddit requests only.
+BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+REDDIT_HEADERS = {"User-Agent": BROWSER_UA, "Accept": "application/json"}
 
 
 def fetch(url: str, headers: dict | None = None, retries: int | None = None) -> bytes:
