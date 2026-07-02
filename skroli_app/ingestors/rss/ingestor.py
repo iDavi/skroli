@@ -224,17 +224,12 @@ class RssIngestor:
         out: list[Item] = []
         for name in names:
             label, origin = f"r/{name}", f"reddit:{name.lower()}"
-            for host in ("https://old.reddit.com", "https://www.reddit.com"):
-                try:
-                    out.extend(self._parse(
-                        fetch(f"{host}/r/{name}/.rss", headers=reddit.REDDIT_HEADERS, retries=1),
-                        label, f"{host}/r/{name}", origin,
-                    ))
-                    break
-                except Exception:  # noqa: BLE001 - try the next host
-                    continue
-            else:
-                print(f"  ! subreddit failed on all hosts: r/{name}")
+            try:
+                out.extend(self._parse(
+                    reddit.fetch_rss(name), label, f"reddit.com/r/{name}", origin,
+                ))
+            except Exception as exc:  # noqa: BLE001 - one sub shouldn't stop the rest
+                print(f"  ! subreddit failed on all hosts: r/{name} ({exc})")
         return out
 
     def _fetch_source(self, src: tuple[str, str, str, str]) -> list[Item]:

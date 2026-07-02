@@ -21,8 +21,32 @@ import html
 import json
 from datetime import datetime, timezone
 
-from .fetcher import REDDIT_HEADERS, fetch
+from .fetcher import BROWSER_UA, USER_AGENT, fetch
 from .models import Item, utcnow
+
+# Attempt chain for every Reddit request. Reddit's API rules ask for a unique,
+# DESCRIPTIVE User-Agent, and in practice that's what gets through (a spoofed
+# browser UA over urllib trips the WAF's UA/TLS-fingerprint mismatch check).
+# The browser UA is kept only as a last-resort variant on old.reddit.
+_ATTEMPTS: list[tuple[str, dict]] = [
+    ("https://www.reddit.com", {"User-Agent": USER_AGENT}),
+    ("https://old.reddit.com", {"User-Agent": USER_AGENT}),
+    ("https://old.reddit.com", {"User-Agent": BROWSER_UA}),
+]
+
+
+def get(path: str) -> bytes:
+    """Fetch ``path`` (e.g. ``/r/a+b/hot.json?...`` or ``/r/x/.rss``) through
+    the host/UA attempt chain; returns the first success, raises the last
+    error. All ingestors reading Reddit share this, so what works is decided in
+    one place."""
+    last_exc: Exception | None = None
+    for host, headers in _ATTEMPTS:
+        try:
+            return fetch(host + path, headers=headers, retries=1)
+        except Exception as exc:  # noqa: BLE001 - try the next host/UA combo
+            last_exc = exc
+    raise last_exc if last_exc else RuntimeError("no attempts")
 
 
 def image_of(d: dict) -> str:
@@ -39,24 +63,22 @@ def image_of(d: dict) -> str:
 
 def fetch_listing(subreddits: list[str], sort: str = "hot", limit: int = 100) -> list[dict]:
     """Fetch one batched listing for ``subreddits`` and return the raw post
-    dicts. Tries www then old.reddit.com; raises the last error if both fail."""
+    dicts. Goes through the shared host/UA attempt chain."""
     multi = "+".join(s.removeprefix("r/").strip("/") for s in subreddits if s.strip())
     if not multi:
         return []
-    path = f"/r/{multi}/{sort}.json?limit={min(limit, 100)}&raw_json=1"
-    last_exc: Exception | None = None
-    for host in ("https://www.reddit.com", "https://old.reddit.com"):
-        try:
-            raw = fetch(host + path, headers=REDDIT_HEADERS, retries=1)
-            data = json.loads(raw)
-            return [
-                c.get("data", {})
-                for c in data.get("data", {}).get("children", [])
-                if c.get("kind") == "t3"
-            ]
-        except Exception as exc:  # noqa: BLE001 - try the next host
-            last_exc = exc
-    raise last_exc if last_exc else RuntimeError("no subreddits")
+    raw = get(f"/r/{multi}/{sort}.json?limit={min(limit, 100)}&raw_json=1")
+    data = json.loads(raw)
+    return [
+        c.get("data", {})
+        for c in data.get("data", {}).get("children", [])
+        if c.get("kind") == "t3"
+    ]
+
+
+def fetch_rss(subreddit: str) -> bytes:
+    """A subreddit's public Atom feed (no votes) via the same attempt chain."""
+    return get(f"/r/{subreddit.removeprefix('r/').strip('/')}/.rss")
 
 
 def post_to_item(d: dict, id_ns: str = "", extra_meta: dict | None = None) -> Item | None:

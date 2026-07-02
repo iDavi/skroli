@@ -15,7 +15,6 @@ import xml.etree.ElementTree as ET
 
 from .config import ImagesConfig
 from ...core import reddit
-from ...core.fetcher import fetch
 from ...core.models import Item, utcnow
 
 _ATOM = "{http://www.w3.org/2005/Atom}"
@@ -62,16 +61,10 @@ class ImagesIngestor:
     def _fetch_rss(self, names: list[str]) -> list[Item]:
         out: list[Item] = []
         for name in names:
-            for host in ("https://old.reddit.com", "https://www.reddit.com"):
-                try:
-                    raw = fetch(f"{host}/r/{name}/.rss",
-                                headers=reddit.REDDIT_HEADERS, retries=1)
-                    out.extend(self._parse_atom(raw, name))
-                    break
-                except Exception:  # noqa: BLE001 - try the next host
-                    continue
-            else:
-                print(f"  ! images: r/{name} failed on all hosts")
+            try:
+                out.extend(self._parse_atom(reddit.fetch_rss(name), name))
+            except Exception as exc:  # noqa: BLE001 - one sub shouldn't stop the rest
+                print(f"  ! images: r/{name} failed on all hosts ({exc})")
         return out
 
     def _parse_atom(self, raw: bytes, name: str) -> list[Item]:
